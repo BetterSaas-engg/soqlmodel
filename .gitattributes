@@ -1,0 +1,6 @@
+# Snapshots are committed and compared byte-for-byte. Line-ending
+# normalization would make an unchanged snapshot look modified on Windows,
+# producing phantom drift reports and undermining write_snapshot's
+# determinism guarantees.
+* text=auto eol=lf
+*.json -text
