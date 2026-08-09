@@ -186,3 +186,76 @@ to render output we know is invalid is the same crash-early principle as
 the nameless-field guard in D6. This is not a timezone *policy*: what
 offset a caller should use, and whether the builder should supply a
 default, stays open and belongs with the query builder.
+
+## D8 — SOQL escaping follows the documented sequence list (2026-08-09)
+
+**Context:** The query builder interpolates caller-supplied values into
+SOQL strings. Escaping is the whole risk surface of that stage. The
+prior `render_literal` escaped backslash and single quote — 2 of the 8
+sequences Salesforce actually documents.
+
+**Decision:** Escape exactly the set in the SOQL and SOSL Reference,
+"Quoted String Escape Sequences": `\\`, `\'`, `\"`, `\n`, `\r`, `\t`,
+`\b`, `\f`. Control characters with no documented sequence are emitted
+as `\uXXXX`, which the same page documents for arbitrary code points.
+One implementation — `fields.escape_string`, used by `render_literal`
+and by nothing else. A second escaper is how one gets fixed and the
+other does not.
+
+Escaping walks the string once, rewriting each character at most once,
+so a backslash introduced by one rule can never be re-escaped by
+another. Sequential `.replace()` calls are the classic way an escaper
+gets defeated.
+
+**`_` and `%` are NOT escaped by default.** The docs list `\_` and `\%`
+as LIKE-only sequences. Outside a LIKE pattern those characters are
+ordinary; inside one they are the wildcards the caller asked for, and
+escaping them silently would break every intentional prefix search.
+`escape_like_wildcards()` is provided for a LIKE pattern carrying user
+data that must match literally. The caller chooses — this is the one
+place the library cannot decide for them, because both readings are
+legitimate.
+
+**Consequence:** A payload cannot terminate the literal. The dangerous
+case is a trailing backslash: undoubled, it would escape the literal's
+own closing quote and let the remainder run as SOQL. Tested, along with
+quotes, `' OR 1=1 --`, newlines, tabs, undocumented control characters,
+and unicode. Non-ASCII passes through as itself — SOQL is UTF-8, and
+escaping it would only make queries unreadable without making them
+safer.
+
+Note the docs label `\b` "Bell" while Python's `\b` is backspace
+(0x08). We map the character to the sequence and let the org interpret
+it; nothing downstream depends on which it is.
+
+**Conditions combine with `&` and `|`, and each side is parenthesized in
+the output.** Python binds `&` tighter than `>`, so callers must
+parenthesize each operand — `(A == 1) & (B > 2)`. We document that
+rather than try to defeat Python's precedence; it is SQLAlchemy's
+constraint for the same reason. `and`/`or` evaluate truthiness and
+therefore raise (D7), and the message names `&` and `|`, so the likeliest
+mistake is a loud error that says what to do instead.
+
+**`ORDER BY` supports both directions**: `order_by(A, desc=True)`
+renders `ORDER BY A DESC`, ascending stays the default, and `desc`
+applies to every field in that call. Mixed directions come from chaining
+calls, which keeps the common cases short and the rare one possible
+without a per-field wrapper type.
+
+**Field ownership is checked by identity everywhere** — `select()`,
+`order_by()` and `where()` alike.
+
+*This changed during review.* The first version had `Filter` store the
+field *name*, so `where()` could only check names. That was not an
+inconsistency, it was a silent wrong-answer path:
+`Contact.CreatedDate > x` used in an `Account` query type-checks (both
+are `Field[datetime]`), passes a name check (Account has a
+`CreatedDate` too), and renders as valid SOQL that filters the wrong
+object's column. Nothing anywhere would report it. The fields with
+names shared across sObjects — `Id`, `Name`, `CreatedDate`, `OwnerId` —
+are the ones people filter on most, so this was the common case rather
+than an exotic one.
+
+`Filter` now holds the `Field` object and `Condition.fields()` returns
+Field objects, which is what makes the identity check possible. Identity
+hashing (D7) is what makes them usable in the sets that check does.
