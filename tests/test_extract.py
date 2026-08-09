@@ -94,6 +94,19 @@ def test_write_snapshot_uses_lf_and_a_trailing_newline(tmp_path):
     assert b"\r\n" not in raw
 
 
+def test_write_snapshot_writes_non_ascii_literally(tmp_path):
+    # Real labels carry non-ASCII. It should read as itself in a diff, not as
+    # a \uXXXX escape — which needs ensure_ascii=False *and* an explicit utf-8
+    # encoding, or this dies on a non-UTF-8 Windows codepage.
+    snapshot = {"org": "Prod", "fields": [{"name": "Größe__c", "label": "Größe — 日本"}]}
+    path = write_snapshot(snapshot, tmp_path / "snapshot.json")
+
+    raw = path.read_bytes()
+    assert "Größe — 日本".encode() in raw
+    assert rb"\u" not in raw
+    assert json.loads(path.read_text(encoding="utf-8")) == snapshot
+
+
 def test_write_snapshot_round_trips(tmp_path):
     snapshot = {"org": "Prod", "sobject": "Account", "fields": [{"name": "Id"}]}
     path = write_snapshot(snapshot, tmp_path / "snapshot.json")

@@ -95,8 +95,13 @@ def write_snapshot(snapshot: dict[str, Any], path: str | Path) -> Path:
 
     Writes LF explicitly and never lets the platform translate line endings, so
     the same snapshot produces the same bytes on Windows and on CI.
+
+    Non-ASCII is written literally rather than ``\\uXXXX``-escaped, so labels
+    read as themselves in a diff (D5). That requires the explicit utf-8
+    encoding below — without it this would die on Windows, whose default
+    codepage is not UTF-8.
     """
     path = Path(path)
-    text = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
+    text = json.dumps(snapshot, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path.write_text(text, encoding="utf-8", newline="\n")
     return path

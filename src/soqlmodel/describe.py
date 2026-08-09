@@ -10,6 +10,11 @@ an already-extracted describe dict.
 
 from typing import Any
 
+# Bumped whenever a change to what we store alters the bytes of an existing
+# snapshot. Lets `check` tell "the format moved, regenerate" apart from
+# "the org's schema drifted" (D6).
+SNAPSHOT_FORMAT_VERSION = 1
+
 # Kept properties, in the order they appear in a trimmed field. Order is fixed
 # so trimmed dicts are byte-identical across runs, not just equal.
 _KEPT_PROPERTIES = (
@@ -34,12 +39,25 @@ _KEPT_PROPERTIES = (
 def trim_field(field: dict[str, Any]) -> dict[str, Any]:
     """Reduce one describe field to the properties worth tracking.
 
-    Properties are kept when present, regardless of value — ``nillable: false``
-    survives, it is not treated as missing. ``picklistValues`` is flattened from
-    a list of objects to a sorted list of the *active* value strings (D4), and is
-    omitted entirely for fields left with no active values.
+    Properties are kept when present and non-null. Falsey-but-not-null values
+    survive — ``nillable: false`` and ``length: 0`` are real answers, not
+    missing ones — while ``null`` is dropped as noise (D5). ``picklistValues``
+    is flattened from a list of objects to a sorted list of the *active* value
+    strings (D4), and is omitted for fields left with no active values.
+
+    Raises:
+        ValueError: if the field has no usable ``name``. That is a corrupt
+            payload, not an edge case — better to fail here than to emit a
+            nameless field for the generator to choke on later.
     """
-    trimmed = {prop: field[prop] for prop in _KEPT_PROPERTIES if prop in field}
+    if field.get("name") is None:
+        raise ValueError(f"describe field has no 'name': {field!r}")
+
+    trimmed = {
+        prop: field[prop]
+        for prop in _KEPT_PROPERTIES
+        if prop in field and field[prop] is not None
+    }
 
     picklist_values = sorted(
         entry["value"]
@@ -69,9 +87,13 @@ def build_snapshot(describe: dict[str, Any], org: str) -> dict[str, Any]:
         raise ValueError("describe payload has no 'name' key; not an sobject describe result")
 
     fields = [trim_field(field) for field in describe.get("fields") or ()]
-    fields.sort(key=lambda field: field.get("name", ""))
+    # Case-insensitive so lowercase custom fields (eCPM__c, ssp_link__c) sit
+    # with their siblings rather than in a clump at the bottom; the exact name
+    # breaks ties so the order stays total and deterministic (D5).
+    fields.sort(key=lambda field: (field["name"].lower(), field["name"]))
 
     return {
+        "format_version": SNAPSHOT_FORMAT_VERSION,
         "org": org,
         "sobject": describe["name"],
         "fields": fields,

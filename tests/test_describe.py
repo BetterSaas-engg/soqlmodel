@@ -36,6 +36,7 @@ def make_field(name: str, **overrides: object) -> dict:
 
 
 def test_drops_untracked_properties():
+    # relationshipName is absent because the fixture leaves it null.
     trimmed = trim_field(make_field("Name"))
 
     assert set(trimmed) == {
@@ -46,7 +47,6 @@ def test_drops_untracked_properties():
         "filterable",
         "sortable",
         "referenceTo",
-        "relationshipName",
         "deprecatedAndHidden",
         "custom",
         "calculated",
@@ -58,11 +58,31 @@ def test_drops_untracked_properties():
 
 
 def test_keeps_falsey_values():
-    # A property present with a falsey value is kept, not treated as missing.
+    # Falsey is a real answer; only null is noise. A required field must not
+    # lose its nillable: false to the None-dropping rule.
     trimmed = trim_field(make_field("Name", nillable=False, length=0))
 
     assert trimmed["nillable"] is False
     assert trimmed["length"] == 0
+
+
+def test_drops_null_valued_properties():
+    trimmed = trim_field(make_field("Name", relationshipName=None, scale=None))
+
+    assert "relationshipName" not in trimmed
+    assert "scale" not in trimmed
+
+
+def test_keeps_empty_containers():
+    # An empty list is not null — referenceTo: [] is kept.
+    assert trim_field(make_field("Name", referenceTo=[]))["referenceTo"] == []
+
+
+def test_a_field_gaining_a_relationship_shows_as_an_added_key():
+    without = trim_field(make_field("OwnerId", relationshipName=None))
+    with_rel = trim_field(make_field("OwnerId", relationshipName="Owner"))
+
+    assert set(with_rel) - set(without) == {"relationshipName"}
 
 
 def test_keeps_only_properties_that_are_present():
@@ -126,6 +146,29 @@ def test_sorts_fields_by_name():
     assert [field["name"] for field in snapshot["fields"]] == ["Id", "Name", "Website"]
 
 
+def test_sorts_case_insensitively():
+    # A lowercase custom field belongs with its siblings, not after every
+    # capitalized name as raw ASCII ordering would put it.
+    describe = {
+        "name": "Account",
+        "fields": [make_field("Website"), make_field("eCPM_EUR__c"), make_field("Id")],
+    }
+
+    snapshot = build_snapshot(describe, org="Prod")
+
+    assert [field["name"] for field in snapshot["fields"]] == ["eCPM_EUR__c", "Id", "Website"]
+
+
+def test_case_only_collisions_have_a_deterministic_order():
+    # Names differing only by case must not depend on input order.
+    fields = [make_field("type__c"), make_field("Type__c")]
+    forwards = build_snapshot({"name": "Account", "fields": fields}, org="Prod")
+    backwards = build_snapshot({"name": "Account", "fields": fields[::-1]}, org="Prod")
+
+    assert [f["name"] for f in forwards["fields"]] == ["Type__c", "type__c"]
+    assert forwards == backwards
+
+
 def test_snapshot_shape():
     describe = {"name": "Account", "fields": [make_field("Id")]}
 
@@ -134,6 +177,39 @@ def test_snapshot_shape():
     assert snapshot["org"] == "Prod"
     assert snapshot["sobject"] == "Account"
     assert len(snapshot["fields"]) == 1
+
+
+def test_snapshot_carries_a_format_version_first():
+    snapshot = build_snapshot({"name": "Account"}, org="Prod")
+
+    assert snapshot["format_version"] == 1
+    assert next(iter(snapshot)) == "format_version"
+
+
+def test_trim_field_rejects_a_field_with_no_name():
+    with pytest.raises(ValueError, match="no 'name'"):
+        trim_field({"type": "string", "label": "Nameless"})
+
+
+def test_trim_field_rejects_a_null_name():
+    # Null would be dropped by the None-rule, leaving a nameless field.
+    field = make_field("Name")
+    field["name"] = None
+
+    with pytest.raises(ValueError, match="no 'name'"):
+        trim_field(field)
+
+
+def test_nameless_field_error_names_the_offending_field():
+    with pytest.raises(ValueError, match="Nameless"):
+        trim_field({"type": "string", "label": "Nameless"})
+
+
+def test_build_snapshot_rejects_a_nameless_field():
+    describe = {"name": "Account", "fields": [make_field("Id"), {"type": "string"}]}
+
+    with pytest.raises(ValueError, match="no 'name'"):
+        build_snapshot(describe, org="Prod")
 
 
 def test_handles_describe_with_no_fields():
