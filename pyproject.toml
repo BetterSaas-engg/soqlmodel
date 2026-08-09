@@ -1,0 +1,23 @@
+[project]
+name = "soqlmodel"
+version = "0.1.0"
+description = "Typed models and a SOQL query builder for Salesforce, generated from your org's schema."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.2",
+]
