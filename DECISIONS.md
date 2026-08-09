@@ -119,3 +119,70 @@ Nameless fields are now rejected at the origin in `trim_field` rather
 than sorted defensively: a field with no `name` is a corrupt payload,
 and failing there beats emitting a nameless field for the generator to
 choke on later.
+
+## D7 — Comparison operators build filters, not booleans (2026-08-09)
+
+**Context:** A query builder needs `Account.AnnualRevenue > 1000000` to
+mean "emit `AnnualRevenue > 1000000`", not "compare two values". That
+means overloading comparison operators on `Field[T]` to return a
+`Filter`. A spike (`.scratch/spike_typing.py`) checked the design under
+mypy before any generator was written.
+
+**Decision:** `Field[T]` overloads `<`, `<=`, `>`, `>=`, `==`, `!=` to
+return `Filter`. Model classes stay pure schema descriptors: plain
+annotated class attributes, never instantiated, never holding row data.
+Four hardening measures came out of the spike.
+
+1. **`Filter.__bool__` raises `TypeError`.** This is the primary safety
+   mechanism, not a formality. A filter is never legitimately evaluated
+   for truthiness, so every path that does so — `if`, `and`/`or`, `in`,
+   `sorted`, `assert` — is a mistake. Without this they pass silently
+   and produce a wrong query; with it they fail loudly at the point of
+   the mistake. The message names the two likeliest causes.
+
+2. **`__ne__` is defined explicitly.** Python derives `__ne__` by
+   negating `__eq__`'s result, which returned `False` in the spike
+   instead of a `Filter` — a silent wrong answer that mypy did not flag,
+   since `bool` is a valid `__ne__` return. With measure 1 in place the
+   derived version would now raise instead, but users expect `!=` to
+   work, so it builds a `!=` filter.
+
+3. **`__hash__ = object.__hash__` — identity hashing.** Defining
+   `__eq__` sets `__hash__` to `None`, which made `Field` unhashable and
+   would break every set and dict the query builder needs (dedupe,
+   projection maps).
+
+   *This reversed during review.* The first version hashed the field
+   name, which bought nothing and laid a trap: two `Field` objects
+   sharing a name hash equal, so the set falls back to `__eq__`, which
+   returns a `Filter`, whose `__bool__` raises via measure 1 — a
+   `TypeError` from what looks like an ordinary `set()` call. Identity
+   hashing has no such fallback, and dedupes correctly for every real
+   use, because a generated model holds exactly one `Field` object per
+   column. SQLAlchemy takes the same approach for the same reason. Where
+   the query builder needs name-level dedupe it will do it explicitly,
+   where the intent is visible.
+
+4. **`# type: ignore[override]` on `__eq__` and `__ne__` only.** mypy
+   correctly reports that returning `Filter` from a narrowed parameter
+   violates `object.__eq__`'s `(object) -> bool` — both the return type
+   and the argument type. The violation is the design, and it is the
+   trade-off SQLAlchemy makes for column expressions. Silenced per
+   operator rather than module-wide, so an unrelated override still
+   errors. `<`, `<=`, `>`, `>=` need no ignore: `object` does not define
+   them.
+
+**Consequence:** What the spike confirmed under mypy: a mistyped
+comparison (`Account.Name > 5`) and an unknown attribute
+(`Account.Nonexistent`) are both static errors, and a valid comparison
+infers as `Filter`. That is the product working as intended — the type
+checker, not a runtime exception, is what catches a bad query.
+
+**Also decided during review:** `render_literal` raises `ValueError` on
+a naive `datetime`, with a message saying to attach a timezone. It had
+been rendering one without an offset, which Salesforce rejects — so the
+error surfaced at the API boundary rather than at the mistake. Refusing
+to render output we know is invalid is the same crash-early principle as
+the nameless-field guard in D6. This is not a timezone *policy*: what
+offset a caller should use, and whether the builder should supply a
+default, stays open and belongs with the query builder.
