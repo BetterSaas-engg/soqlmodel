@@ -15,6 +15,10 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Registered, but NOT excluded by default: the wheel check guards a failure
+# mode nothing else can see, so it runs unless someone opts out explicitly
+# with -m "not slow".
+markers = ["slow: builds artifacts or shells out to slow tools"]
 
 [dependency-groups]
 dev = [
