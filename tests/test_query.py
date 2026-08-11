@@ -1,6 +1,6 @@
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -224,21 +224,21 @@ def test_rejects_a_shared_field_name_from_another_sobject_in_where():
     happy, the name check was happy, and the query rendered as valid SOQL that
     filtered the wrong object's column. Identity catches it (D8).
     """
-    when = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    when = datetime(2026, 8, 9, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="not a field of Account"):
         select(Account, Account.Name).where(Contact.CreatedDate > when)
 
 
 def test_the_correct_sobjects_shared_field_is_still_accepted():
-    when = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    when = datetime(2026, 8, 9, tzinfo=UTC)
     query = select(Account, Account.Name).where(Account.CreatedDate > when)
 
     assert "WHERE CreatedDate > 2026-08-09T00:00:00+00:00" in str(query)
 
 
 def test_rejects_a_shared_field_name_nested_in_a_composite():
-    when = datetime(2026, 8, 9, tzinfo=timezone.utc)
+    when = datetime(2026, 8, 9, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="not a field of Account"):
         select(Account, Account.Name).where(
@@ -431,7 +431,7 @@ def test_escaped_wildcards_survive_rendering():
 
 
 def test_datetime_literals_are_unquoted():
-    when = datetime(2026, 8, 9, 13, 30, tzinfo=timezone.utc)
+    when = datetime(2026, 8, 9, 13, 30, tzinfo=UTC)
     query = select(Account, Account.Name).where(Account.CreatedDate > when)
 
     assert str(query).endswith("WHERE CreatedDate > 2026-08-09T13:30:00+00:00")

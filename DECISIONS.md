@@ -259,3 +259,72 @@ than an exotic one.
 `Filter` now holds the `Field` object and `Condition.fields()` returns
 Field objects, which is what makes the identity check possible. Identity
 hashing (D7) is what makes them usable in the sets that check does.
+
+## D9 — Snapshots are scoped to a declared dependency (2026-08-11)
+
+**Context:** An unscoped Account snapshot holds 239 fields. A pipeline
+reads four of them. `check` would report drift on the other ~200 —
+fields nobody in the project has ever referenced. A detector that cries
+wolf gets ignored, and an ignored detector gets deleted.
+
+There is a second, larger reason. A snapshot of *everything* mirrors the
+org; a *scoped* snapshot declares a dependency. Only the second makes the
+project's purpose statement true, and only the second is a contract
+between the team that administers the org and the team that depends on
+it. `soqlmodel.toml` is that contract, in the repo, in review.
+
+**Decision:** `soqlmodel.toml` at the project root declares scope:
+
+    org = "FULL Sandbox"
+
+    [objects]
+    Account = ["Name", "AnnualRevenue", "Contract_End__c"]
+    Opportunity = ["*"]
+
+A list scopes to those fields; `"*"` means all of them; an object not
+mentioned is unscoped; **no config file at all means everything**, so the
+tool works before anyone has configured it and narrows only once someone
+declares a dependency.
+
+`build_snapshot(describe, org, fields=None)` takes the filter. A scoped
+snapshot records `requested_fields`, so `check` can distinguish "a field
+I asked for is gone" (breaks the pipeline) from "a field I never asked
+for" (not my problem). Unscoped snapshots omit the key entirely, which
+is why this needs no `format_version` bump under D6: every snapshot that
+could already exist is byte-identical to what it was.
+
+**A requested field the org does not have is an error — but only for
+the stages that are declaring a dependency.** `build_snapshot` takes
+`strict=True` by default: it names the field and the sObject, and
+suggests the right casing when only case differs. Silently dropping it
+would generate a model missing an attribute the pipeline references —
+code that fails later, further from the cause. Same crash-early
+principle as D6's nameless-field guard and D7's naive-datetime refusal.
+
+`check` passes `strict=False` and reads `missing_fields(snapshot)`
+instead. **The rule is per stage, not per project:** raising is right
+when you are declaring what you need, and wrong when you are asking what
+changed. A declared field disappearing is the single most important
+drift case there is; if `check` inherited the raise, that case would
+produce a stack trace instead of the CRITICAL line it deserves. A
+snapshot built either way is byte-identical when nothing is missing, so
+the flag changes error behaviour and nothing else.
+
+**Consequence:** Measured against the real org: 239 fields → 4, and
+112,715 bytes → 1,948. A diff of that snapshot is readable in full by a
+person, which is the entire point. Determinism is unaffected —
+`requested_fields` is sorted and deduped, and scoped snapshots are
+byte-identical across runs.
+
+**`requires-python` is `>=3.11`, and there are no runtime
+dependencies.** Config parsing needs TOML; `tomllib` is stdlib from
+3.11, and on 3.10 it would mean depending on `tomli`.
+
+*This reversed during review.* The first version kept the 3.10 floor and
+took the dependency. Two reasons it went the other way. Widening
+`requires-python` later is not a breaking change while narrowing it is,
+so 3.11 is the reversible choice in both directions — a 3.10 user can be
+supported later by adding the backport, but a dependency cannot be
+removed from under anyone. And zero runtime dependencies is worth more
+to a library that data teams vendor into pipelines than two months of
+3.10 support (3.10 reaches EOL in October 2026).

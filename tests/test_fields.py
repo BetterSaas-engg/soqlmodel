@@ -1,6 +1,6 @@
 import subprocess
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
@@ -133,7 +133,7 @@ def test_distinct_fields_sharing_a_name_are_not_set_equal():
         (1.5, "1.5"),
         (date(2026, 8, 9), "2026-08-09"),
         (
-            datetime(2026, 8, 9, 13, 30, tzinfo=timezone.utc),
+            datetime(2026, 8, 9, 13, 30, tzinfo=UTC),
             "2026-08-09T13:30:00+00:00",
         ),
         (

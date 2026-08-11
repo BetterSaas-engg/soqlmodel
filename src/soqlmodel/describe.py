@@ -8,6 +8,7 @@ Pure functions only — nothing here touches the network. The caller supplies
 an already-extracted describe dict.
 """
 
+from collections.abc import Iterable
 from typing import Any
 
 # Bumped whenever a change to what we store alters the bytes of an existing
@@ -71,30 +72,110 @@ def trim_field(field: dict[str, Any]) -> dict[str, Any]:
     return trimmed
 
 
-def build_snapshot(describe: dict[str, Any], org: str) -> dict[str, Any]:
+def _apply_scope(
+    fields: list[dict[str, Any]], requested: Iterable[str], sobject: str, strict: bool
+) -> list[dict[str, Any]]:
+    """Keep only requested fields, reporting ones the org does not have.
+
+    Under ``strict`` a requested field that does not exist raises: the caller
+    is declaring a dependency, and silently returning a smaller model would
+    produce code that compiles and a pipeline that reads nothing. Without it
+    the field is simply absent from the result, for callers asking *what
+    changed* rather than declaring what they need (D9).
+    """
+    by_name = {field["name"]: field for field in fields}
+    kept = [by_name[name] for name in requested if name in by_name]
+
+    if not strict:
+        return kept
+
+    lowered = {name.lower(): name for name in by_name}
+    missing = []
+    for name in requested:
+        if name in by_name:
+            continue
+        suggestion = lowered.get(name.lower())
+        missing.append(f"{name!r}{f' (did you mean {suggestion!r}?)' if suggestion else ''}")
+
+    if missing:
+        raise ValueError(
+            f"{sobject}: requested field(s) not present in the org: "
+            f"{', '.join(sorted(missing))}"
+        )
+
+    return kept
+
+
+def missing_fields(snapshot: dict[str, Any]) -> list[str]:
+    """Declared fields the org did not return, sorted.
+
+    Empty for an unscoped snapshot — nothing was declared, so nothing can be
+    missing. This is how `check` reads the result of a non-strict rebuild:
+    a declared field that has disappeared is the drift that matters most, and
+    it deserves a CRITICAL line rather than a stack trace (D9).
+    """
+    requested = snapshot.get("requested_fields")
+    if requested is None:
+        return []
+
+    present = {field["name"] for field in snapshot.get("fields") or ()}
+    return sorted(set(requested) - present)
+
+
+def build_snapshot(
+    describe: dict[str, Any],
+    org: str,
+    fields: Iterable[str] | None = None,
+    strict: bool = True,
+) -> dict[str, Any]:
     """Build the snapshot for one sobject describe payload.
 
     Fields are sorted by name and each is trimmed. Nothing time-varying is
     recorded: re-running this against an unchanged org yields an identical
     snapshot.
 
+    Args:
+        describe: one sobject describe payload, already unwrapped.
+        org: the org alias, recorded in the snapshot.
+        fields: the field names this project depends on. ``None`` means every
+            field — the unscoped default. When given, the requested names are
+            recorded in the snapshot so `check` can tell "a field I asked for
+            is gone" from "a field I never asked for" (D9).
+        strict: raise if a requested field is not on the sobject. True for
+            snapshot and generate, which are declaring a dependency. `check`
+            passes False and reads :func:`missing_fields` instead — asking
+            what changed must not crash on the answer.
+
     Raises:
         ValueError: if the payload has no ``name`` key, which means it is not a
             describe result (most often the ``sf`` CLI envelope was passed in
-            instead of its ``result`` value).
+            instead of its ``result`` value); or, under ``strict``, if a
+            requested field does not exist on the sobject.
     """
     if "name" not in describe:
         raise ValueError("describe payload has no 'name' key; not an sobject describe result")
 
-    fields = [trim_field(field) for field in describe.get("fields") or ()]
+    trimmed = [trim_field(field) for field in describe.get("fields") or ()]
+
+    requested = None if fields is None else sorted(set(fields))
+    if requested is not None:
+        trimmed = _apply_scope(trimmed, requested, describe["name"], strict=strict)
+
     # Case-insensitive so lowercase custom fields (eCPM__c, ssp_link__c) sit
     # with their siblings rather than in a clump at the bottom; the exact name
     # breaks ties so the order stays total and deterministic (D5).
-    fields.sort(key=lambda field: (field["name"].lower(), field["name"]))
+    trimmed.sort(key=lambda field: (field["name"].lower(), field["name"]))
 
-    return {
+    snapshot: dict[str, Any] = {
         "format_version": SNAPSHOT_FORMAT_VERSION,
         "org": org,
         "sobject": describe["name"],
-        "fields": fields,
+        "fields": trimmed,
     }
+
+    if requested is not None:
+        # Recorded only when scoped, so unscoped snapshots keep the bytes they
+        # had before scoping existed (D9).
+        snapshot["requested_fields"] = requested
+
+    return snapshot

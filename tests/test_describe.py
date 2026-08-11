@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from soqlmodel.describe import build_snapshot, trim_field
+from soqlmodel.describe import build_snapshot, missing_fields, trim_field
 
 
 def make_field(name: str, **overrides: object) -> dict:
@@ -203,6 +203,166 @@ def test_trim_field_rejects_a_null_name():
 def test_nameless_field_error_names_the_offending_field():
     with pytest.raises(ValueError, match="Nameless"):
         trim_field({"type": "string", "label": "Nameless"})
+
+
+# --- scoping ----------------------------------------------------------------
+
+
+SCOPED_DESCRIBE = {
+    "name": "Account",
+    "fields": [make_field("Name"), make_field("AnnualRevenue"), make_field("Website")],
+}
+
+
+def test_unscoped_snapshot_keeps_every_field():
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod")
+
+    assert [f["name"] for f in snapshot["fields"]] == ["AnnualRevenue", "Name", "Website"]
+
+
+def test_unscoped_snapshot_records_no_request():
+    # Absent config means everything; the key stays out so unscoped snapshots
+    # keep the bytes they had before scoping existed.
+    assert "requested_fields" not in build_snapshot(SCOPED_DESCRIBE, org="Prod")
+
+
+def test_scoped_snapshot_keeps_only_requested_fields():
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"])
+
+    assert [f["name"] for f in snapshot["fields"]] == ["Name", "Website"]
+
+
+def test_scoped_snapshot_records_what_was_requested():
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Website", "Name"])
+
+    assert snapshot["requested_fields"] == ["Name", "Website"]
+
+
+def test_requested_fields_are_sorted_and_deduped():
+    snapshot = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Website", "Name", "Website"]
+    )
+
+    assert snapshot["requested_fields"] == ["Name", "Website"]
+
+
+def test_scoping_preserves_field_sort_order():
+    snapshot = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Website", "AnnualRevenue"]
+    )
+
+    assert [f["name"] for f in snapshot["fields"]] == ["AnnualRevenue", "Website"]
+
+
+def test_scoped_snapshots_are_deterministic():
+    first = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Website", "Name"])
+    second = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"])
+
+    assert json.dumps(first) == json.dumps(second)
+
+
+def test_an_empty_scope_selects_nothing_but_is_not_an_error():
+    # config.py rejects an empty list; build_snapshot itself just obeys.
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=[])
+
+    assert snapshot["fields"] == []
+    assert snapshot["requested_fields"] == []
+
+
+def test_a_requested_field_the_org_lacks_is_an_error():
+    # Drift the caller needs to hear about now, not silently empty output.
+    with pytest.raises(ValueError, match="not present in the org"):
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Contract_End__c"])
+
+
+def test_the_error_names_the_missing_field_and_the_sobject():
+    with pytest.raises(ValueError, match="Account: .*'Contract_End__c'"):
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Contract_End__c"])
+
+
+def test_the_error_names_every_missing_field():
+    with pytest.raises(ValueError) as exc:
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Nope__c", "AlsoNope__c"])
+
+    assert "'Nope__c'" in str(exc.value)
+    assert "'AlsoNope__c'" in str(exc.value)
+
+
+def test_a_case_mismatch_suggests_the_real_field():
+    with pytest.raises(ValueError, match="did you mean 'AnnualRevenue'"):
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["annualrevenue"])
+
+
+def test_scoping_is_case_sensitive():
+    # Salesforce API names have exact casing; we do not guess, we report.
+    with pytest.raises(ValueError, match="not present in the org"):
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["name"])
+
+
+# --- the non-raising path, for check ----------------------------------------
+
+
+def test_strict_is_the_default():
+    with pytest.raises(ValueError):
+        build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Gone__c"])
+
+
+def test_non_strict_does_not_raise_on_a_missing_field():
+    # `check` asks what changed. It must not crash on the answer.
+    snapshot = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
+    )
+
+    assert [f["name"] for f in snapshot["fields"]] == ["Name"]
+
+
+def test_non_strict_still_records_what_was_requested():
+    # The declaration survives even though the field did not: that is what
+    # lets check say "a field you declared is gone".
+    snapshot = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
+    )
+
+    assert snapshot["requested_fields"] == ["Gone__c", "Name"]
+
+
+def test_missing_fields_reports_the_gap():
+    snapshot = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c", "AlsoGone__c"], strict=False
+    )
+
+    assert missing_fields(snapshot) == ["AlsoGone__c", "Gone__c"]
+
+
+def test_missing_fields_is_empty_when_nothing_is_missing():
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name"], strict=False)
+
+    assert missing_fields(snapshot) == []
+
+
+def test_missing_fields_is_empty_for_an_unscoped_snapshot():
+    # Nothing was declared, so nothing can be missing.
+    assert missing_fields(build_snapshot(SCOPED_DESCRIBE, org="Prod")) == []
+
+
+def test_strictness_does_not_change_a_snapshot_with_nothing_missing():
+    strict = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"])
+    lenient = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"], strict=False
+    )
+
+    assert json.dumps(strict) == json.dumps(lenient)
+
+
+def test_non_strict_snapshots_are_deterministic():
+    first = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Gone__c", "Name"], strict=False
+    )
+    second = build_snapshot(
+        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
+    )
+
+    assert json.dumps(first) == json.dumps(second)
 
 
 def test_build_snapshot_rejects_a_nameless_field():
