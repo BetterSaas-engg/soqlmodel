@@ -328,3 +328,49 @@ supported later by adding the backport, but a dependency cannot be
 removed from under anyone. And zero runtime dependencies is worth more
 to a library that data teams vendor into pipelines than two months of
 3.10 support (3.10 reaches EOL in October 2026).
+
+## D10 — CRITICAL fails the build, WARNING does not (2026-08-11)
+
+**Context:** `check` classifies drift. The severity line is the product:
+too strict and every picklist edit by an admin turns a deploy red, too
+loose and a broken pipeline ships. Both failure modes end the same way —
+the check gets muted, and then the CRITICALs stop being seen either.
+
+**Decision:** Two severities, and only one of them fails.
+
+CRITICAL — a pipeline is broken, or is about to return wrong numbers:
+a declared field no longer exists; a field's type changed; a picklist
+value was removed (a mapping keyed on it is now dead, per D3/D4);
+`filterable` or `sortable` became false, breaking existing WHERE and
+ORDER BY clauses; `deprecatedAndHidden` became true.
+
+WARNING — real information, breaks nothing that already runs: a picklist
+value was added (silently unmapped, which is precisely why D3 stores
+values at all); `nillable` changed; `length`, `precision` or `scale`
+changed; a new field appeared on an object scoped with `"*"`.
+
+`exit_code` is 1 if any CRITICAL is present, else 0. **WARNINGs alone do
+not fail the build.** A value being added to a picklist is worth reading
+on a Monday morning; it is not a reason to block a deploy at 5pm, and a
+check that blocks on things nobody can act on immediately is a check
+people learn to skip. The asymmetry is the point: CRITICAL has to be
+rare enough that a red build means something.
+
+Gaining a capability is never reported — `filterable` going false→true
+breaks nothing, so it produces no line at all. Silence on harmless
+change is what keeps the report readable.
+
+**A `format_version` mismatch short-circuits the whole diff** and
+returns one CRITICAL telling the user to regenerate. Per D6 that
+difference is our format moving, not the org's schema; diffing across
+formats would report our own reformatting as drift, which is the exact
+false positive this project exists to prevent. It is CRITICAL because
+the check could not actually run — reporting "no drift" from a diff that
+never happened would be worse than failing.
+
+**Consequence:** `diff_snapshots` is pure — two dicts in, changes out —
+so every rule above is tested against fixtures rather than an org. The
+live side is built with `strict=False` (D9), which is load-bearing: a
+declared field that has vanished is the most important drift case there
+is, and under `strict=True` it would arrive as a traceback instead of
+the CRITICAL line it deserves.
