@@ -52,6 +52,15 @@ def _sort_key(change: Change) -> tuple[int, str, str, str]:
     )
 
 
+def sort_changes(changes: list[Change]) -> list[Change]:
+    """Order changes CRITICAL first, then by sObject, field and message.
+
+    The one ordering rule, so a single-object diff and an aggregated
+    multi-object report read the same way.
+    """
+    return sorted(changes, key=_sort_key)
+
+
 def _by_name(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {field["name"]: field for field in snapshot.get("fields") or ()}
 
@@ -163,8 +172,7 @@ def diff_snapshots(committed: dict[str, Any], live: dict[str, Any]) -> list[Chan
     for name in sorted(set(was) & set(now)):
         changes.extend(_compare_field(sobject, name, was[name], now[name]))
 
-    changes.sort(key=_sort_key)
-    return changes
+    return sort_changes(changes)
 
 
 def format_report(changes: list[Change]) -> str:

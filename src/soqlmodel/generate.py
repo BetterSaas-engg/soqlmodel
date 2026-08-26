@@ -11,6 +11,7 @@ the generated output is checked by both in the test suite.
 """
 
 import keyword
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -86,18 +87,8 @@ def _imports_for(python_types: list[str]) -> list[str]:
     return lines
 
 
-def generate_module(snapshot: dict[str, Any]) -> str:
-    """Render a snapshot as the source text of a typed model module.
-
-    Fields keep snapshot order, which `build_snapshot` already sorted. Nothing
-    time-varying is emitted, so regenerating an unchanged snapshot produces
-    byte-identical text.
-
-    Raises:
-        ValueError: if the sObject or any field name is not a usable Python
-            identifier. Mangling it silently would produce a model whose
-            attribute names do not match the org.
-    """
+def _class_lines(snapshot: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Render one class body. Returns its lines and the Python types it uses."""
     sobject = snapshot["sobject"]
     _check_identifier(sobject, "sObject name")
 
@@ -107,17 +98,7 @@ def generate_module(snapshot: dict[str, Any]) -> str:
 
     python_types = [python_type_for(field.get("type", "")) for field in fields]
 
-    lines = [
-        _HEADER,
-        f"# Org: {snapshot['org']}",
-        f"# Snapshot format: {snapshot.get('format_version', SNAPSHOT_FORMAT_VERSION)}",
-        "",
-        *_imports_for(python_types),
-        "",
-        "",
-        f"class {sobject}:",
-    ]
-
+    lines = [f"class {sobject}:"]
     if not fields:
         lines.append("    pass")
     for field, python_type in zip(fields, python_types, strict=True):
@@ -125,15 +106,79 @@ def generate_module(snapshot: dict[str, Any]) -> str:
         soql_type = field.get("type", "")
         lines.append(f'    {name}: Field[{python_type}] = Field("{name}", "{soql_type}")')
 
+    return lines, python_types
+
+
+def _sobject_key(snapshot: dict[str, Any]) -> tuple[str, str]:
+    name = snapshot["sobject"]
+    return (name.lower(), name)
+
+
+def generate_combined_module(snapshots: Sequence[dict[str, Any]]) -> str:
+    """Render several snapshots as one module, one class per sObject.
+
+    Classes are ordered by sObject name and imports are the union of what the
+    classes actually use, so regenerating from unchanged snapshots produces
+    byte-identical text no matter what order they arrive in.
+
+    Raises:
+        ValueError: if an sObject or field name is not a usable Python
+            identifier. Mangling it silently would produce a model whose
+            attribute names do not match the org.
+    """
+    ordered = sorted(snapshots, key=_sobject_key)
+
+    bodies = []
+    used_types: list[str] = []
+    for snapshot in ordered:
+        lines, python_types = _class_lines(snapshot)
+        bodies.append(lines)
+        used_types.extend(python_types)
+
+    # Several snapshots should share an org and a format; if they somehow do
+    # not, say so in the header rather than silently picking one.
+    orgs = sorted({snapshot["org"] for snapshot in ordered})
+    versions = sorted(
+        {snapshot.get("format_version", SNAPSHOT_FORMAT_VERSION) for snapshot in ordered}
+    )
+
+    lines = [
+        _HEADER,
+        f"# Org: {', '.join(orgs)}",
+        f"# Snapshot format: {', '.join(str(version) for version in versions)}",
+        "",
+        *_imports_for(used_types),
+    ]
+    for body in bodies:
+        lines.extend(["", "", *body])
+
     return "\n".join(lines) + "\n"
 
 
-def write_module(snapshot: dict[str, Any], path: str | Path) -> Path:
-    """Write :func:`generate_module`'s output to ``path``.
+def generate_module(snapshot: dict[str, Any]) -> str:
+    """Render one snapshot as the source text of a typed model module.
 
-    LF and utf-8 are explicit for the same reason as `write_snapshot`: the
+    Fields keep snapshot order, which `build_snapshot` already sorted. Nothing
+    time-varying is emitted, so regenerating an unchanged snapshot produces
+    byte-identical text.
+    """
+    return generate_combined_module([snapshot])
+
+
+def _write(text: str, path: str | Path) -> Path:
+    """LF and utf-8 are explicit for the same reason as `write_snapshot`: the
     platform must not get a vote in what bytes come out.
     """
     path = Path(path)
-    path.write_text(generate_module(snapshot), encoding="utf-8", newline="\n")
+    path.write_text(text, encoding="utf-8", newline="\n")
     return path
+
+
+def write_module(snapshot: dict[str, Any], path: str | Path) -> Path:
+    """Write :func:`generate_module`'s output to ``path``."""
+    return _write(generate_module(snapshot), path)
+
+
+def write_combined_module(snapshots: Sequence[dict[str, Any]], path: str | Path) -> Path:
+    """Write :func:`generate_combined_module`'s output to ``path``."""
+    return _write(generate_combined_module(snapshots), path)
