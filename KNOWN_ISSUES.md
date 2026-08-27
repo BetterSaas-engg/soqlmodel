@@ -84,15 +84,16 @@ SFM-11 does not have to rediscover them.
   done. Update it alongside the README, in the same pass.
 
 - **CI must verify mypy on Linux regardless of it working locally
-  again.** The entry below records the local block clearing on
+  again.** The RESOLVED entry above records the local block clearing on
   2026-08-26. That is one machine's toolchain and is not evidence about
   anyone else's; the type-checking claim is this project's central
   contract and CI is where it gets verified for real.
 
 - **CI runs `ruff format --check` beside `ruff check`** (D14).
 
-- **Generated output is not format-clean** — see the entry above. Decide
-  whether it blocks the PyPI release or ships as a known limitation.
+- **Generated output is not format-clean** — see the first entry in this
+  file. Decide whether it blocks the PyPI release or ships as a known
+  limitation.
 
 - **`generate.py` has a dangling "see the backlog" reference** in the
   comment above `FALLBACK_TYPE`, about compound types (address,
