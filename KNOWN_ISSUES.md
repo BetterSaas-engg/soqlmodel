@@ -1,5 +1,30 @@
 # Known issues
 
+## `sf org display` does not yield a usable session for a third-party client (2026-08-27)
+
+Hit doing SFM-10's live acceptance run. The `accessToken` returned by
+`sf org display --target-org "FULL Sandbox" --json` is rejected by every
+authenticated REST endpoint (401 `INVALID_AUTH_HEADER` on
+`/services/data/vNN.0/query`, 403 on `/services/oauth2/userinfo`), while
+the sf CLI itself queries the org fine. So a `simple_salesforce.Salesforce`
+built from that token cannot be used here.
+
+A trap worth writing down: `GET /services/data/` returns **200 with a
+deliberately bogus token**. It does not enforce auth, so it is useless as
+a credential check and will tell you a dead token is alive. Verify
+against `/services/data/vNN.0/limits` instead.
+
+Consequence for acceptance runs: the drain was verified against the real
+org through a client backed by `sf api request rest`, which uses the
+CLI's own session and satisfies the same Protocol. That exercises the
+cursor logic against real batches. The simple-salesforce leg
+specifically is covered only by offline tests — including one that
+transcribes its real method signatures and asserts Protocol conformance.
+
+Resolving it means obtaining a session another way (a fresh `sf org
+login`, or username/password/token credentials). Not attempted here:
+that is credential material and it was not needed to prove the paging.
+
 ## Generated output is not `ruff format`-clean (2026-08-27)
 
 D14 enforces `ruff format` on this repo, and the rule it implies is that

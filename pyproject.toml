@@ -9,6 +9,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+# Optional, never imported (D1/D15). soqlmodel types the client structurally,
+# so snapshot, generate and check all work with this absent; it is needed only
+# to construct the client that soqlmodel.execute is handed.
+[project.optional-dependencies]
+salesforce = ["simple-salesforce>=1.12"]
+
 [project.scripts]
 soqlmodel = "soqlmodel.cli:main"
 

@@ -44,3 +44,13 @@ class SnapshotError(SoqlModelError):
 
 class GenerateError(SoqlModelError):
     """A snapshot could not be rendered as a Python module."""
+
+
+class ExecuteError(SoqlModelError):
+    """A query could not be handed to a client, or the cursor broke mid-drain.
+
+    Ours only. An exception raised by the client itself — a bad SOQL string, an
+    expired session, a network failure — propagates untouched: it is their
+    error, they word it better than we could, and swallowing it into this class
+    would lose the type a caller wants to catch on (D15).
+    """

@@ -538,3 +538,72 @@ by us. Recorded in KNOWN_ISSUES.md.
 The reformat lands as its own mechanical commit, separate from both this
 decision and from SFM-9, so that `git blame` crosses one commit that
 changed no behaviour rather than being scattered through a review.
+
+## D15 — execute owns the drain loop; D1's "pagination" means transport (2026-08-27)
+
+**Context:** SFM-10 closes the last gap: `query` ended at a rendered
+string and the caller carried it to a client themselves. The moment they
+do that, they own the paging — and a Salesforce query returns the first
+2000 rows plus a `nextRecordsUrl`, so code that reads
+`response["records"]` and stops has a plausible answer instead of an
+error. That is the failure this project exists to prevent, and by hand
+it is the *normal* outcome rather than an unusual one.
+
+**This narrows D1**, which said we do not implement "auth, HTTP,
+pagination, or retries". Taken literally it forbids this ticket, and
+simple-salesforce already ships `query_all` / `query_all_iter` that
+drain for us.
+
+**Decision:** Four parts.
+
+**We own the drain loop; D1's "pagination" is read as transport.**
+simple-salesforce still performs every request, session refresh and
+retry — we never issue HTTP. What we own is ~10 lines walking already
+decoded dicts, with no I/O of our own. Delegating to `query_all_iter`
+would honour D1's letter, but there would then be no drain of ours to
+test, and the paging guarantee — the reason the module exists — would
+rest entirely on an untested dependency. It also buys a real
+improvement: their loop does `result['nextRecordsUrl']` unguarded, so a
+`done: false` response missing the URL raises a bare `KeyError`. Ours
+raises `ExecuteError` saying the cursor broke mid-drain and these rows
+are an incomplete answer.
+
+**The client is a `runtime_checkable` Protocol, not a duck-typed
+`Any`.** Structural typing is what keeps simple-salesforce *optional*:
+we declare the two methods we call rather than importing the class, so
+nothing in soqlmodel imports it at runtime or for typing, and
+snapshot/generate/check all work with it absent. A duck-typed client
+would be `Any`, which mypy cannot check at all — unacceptable in a
+project whose central claim is static checkability. `runtime_checkable`
+additionally lets a wrong object be rejected at the call with a message
+naming the missing method, instead of an `AttributeError` from inside a
+generator.
+
+**No row cap. Drain unbounded, and ship `execute_iter` alongside
+`execute`.** `Query.limit` already caps *server-side*, which strictly
+beats any client-side cap — it stops rows crossing the wire rather than
+discarding them after paying for them. A cap that raised would make a
+legitimate large export impossible; a cap that truncated would be the
+exact plausible-wrong-answer failure this module is written against.
+Memory exhaustion is a crash, not a wrong number, and this project
+prefers the crash. `execute_iter` is the honest tool for a result set
+that should not be held in memory, and it costs nothing: the drain is a
+generator either way, and `execute` is `list(execute_iter(...))`.
+
+**`execute` is a free function in its own module, not `Query.execute`.**
+A method reads better as a chain, but CLAUDE.md's architecture says
+stages 2-4 are pure with no network, and `query.py` says so in its own
+docstring. Hanging a network call off `Query` would make that false.
+`execute.py` imports `query`; `query` imports nothing new.
+
+**Rows come back as `list[dict]`, exactly as the API returned them.** No
+mapping onto generated models in v1 — that is SFM-10d.
+
+**Consequence:** the client's own exceptions propagate untouched. A bad
+SOQL string, an expired session, a connection reset — those are
+simple-salesforce's to report, they word them better than we would, and
+wrapping them into `ExecuteError` would destroy the type a caller wants
+to catch on. `ExecuteError` is raised only for our own failures: a
+client that cannot answer our calls, a malformed batch, a cursor that
+stops advancing. That split is D11 applied one module further out, and
+it is tested by a mutation that wraps client errors and must fail.
