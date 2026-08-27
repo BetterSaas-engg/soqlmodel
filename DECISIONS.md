@@ -484,3 +484,57 @@ about the first three bytes, not about the character. This does not yet
 close the general case: a snapshot reindented by hand still parses to
 the same dict and still reports clean. Canonical-form checking is a
 larger idea and is not in v1.
+
+## D14 — `ruff format` is enforced (2026-08-27)
+
+**Context:** `ruff check` has been clean since D1. `ruff format` never
+has been — 11 files on HEAD would be reformatted. Nothing said whether
+that was a decision or an oversight, and SFM-11 is about to wire up CI.
+CI would have silently ratified the oversight: a pipeline that runs only
+`ruff check` is a pipeline that says formatting does not matter, forever,
+because nobody revisits a green build.
+
+**Decision:** Adopt it. `ruff format --check` runs in CI beside
+`ruff check`, at the existing `line-length = 100`.
+
+Three reasons, in increasing order of weight.
+
+It costs nothing here. The reformat is pure line-joining — wrapped calls
+and implicitly-concatenated strings that already fit inside 100
+characters. No string *content* changes, so no error message a test
+matches on moves. Nothing hand-tuned is lost, which is the usual reason
+to refuse a formatter.
+
+The moment is free. Adopting a formatter is cheap before CI exists and
+annoying afterwards, when it means one reformat commit crossing every
+open branch.
+
+And the real reason: **`generate` emits Python source that users
+commit.** If our own formatting is unenforced, we have no standard to
+hold generated output to either — and generated output is exactly where
+formatting stops being cosmetic. A user whose repo runs `ruff format`
+will have it rewrap our output, and the next `soqlmodel generate` will
+write it flat again. That is a diff on every run with no schema change
+behind it, in the user's repo, from the tool whose entire purpose is to
+stop phantom diffs. Same failure as the BOM in D13, one layer out.
+
+**Consequence — and an open defect.** The rule this decision creates is
+that generated output must already be `ruff format`-clean, so
+regenerating never fights a user's formatter. **It is not, today.** A
+field name over roughly 30 characters pushes its line past 100:
+
+    Commission_Attainment_Rolling_12M__c: Field[str] = Field("Commission_Attainment_Rolling_12M__c", "picklist")
+
+That is 110 characters, from a real object in a real org, and long API
+names are the norm in Salesforce rather than the exception. It passes
+`ruff check` only because `line-length` alone does not enable E501.
+
+This decision does not fix that — the generator has to learn to wrap,
+and that is its own ticket. What the decision does is make the defect
+*expressible*: with no formatting standard there was no sense in which
+the output was wrong, and it would have been found by a user instead of
+by us. Recorded in KNOWN_ISSUES.md.
+
+The reformat lands as its own mechanical commit, separate from both this
+decision and from SFM-9, so that `git blame` crosses one commit that
+changed no behaviour rather than being scattered through a review.
