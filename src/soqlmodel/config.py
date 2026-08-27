@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from soqlmodel.errors import ConfigError
+
 CONFIG_FILENAME = "soqlmodel.toml"
 
 # A scope of None means "every field on this object" — the unscoped default.
@@ -58,12 +60,12 @@ class Config:
 
 def _parse_scope(sobject: str, raw: Any) -> Scope:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-        raise ValueError(
+        raise ConfigError(
             f"[objects] {sobject} must be a list of field names, or [\"*\"]; "
             f"got {raw!r}"
         )
     if not raw:
-        raise ValueError(
+        raise ConfigError(
             f"[objects] {sobject} is an empty list, which would select no fields. "
             f'Use ["*"] for every field, or remove the entry.'
         )
@@ -77,13 +79,14 @@ def parse_config(data: dict[str, Any], path: Path | None = None) -> Config:
     """Build a :class:`Config` from already-parsed TOML."""
     org = data.get("org")
     if org is not None and not isinstance(org, str):
-        raise ValueError(f"org must be a string, got {org!r}")
+        raise ConfigError(f"org must be a string, got {org!r}")
 
     raw_objects = data.get("objects", {})
     if not isinstance(raw_objects, dict):
-        # ValueError, not TypeError: the user handed us a malformed document,
-        # they did not call a Python API with the wrong type.
-        raise ValueError(f"[objects] must be a table, got {raw_objects!r}")  # noqa: TRY004
+        # ConfigError, not TypeError: the user handed us a malformed document,
+        # they did not call a Python API with the wrong type. The distinction
+        # decides whether this reaches them as one line or as a traceback (D11).
+        raise ConfigError(f"[objects] must be a table, got {raw_objects!r}")
 
     objects = {name: _parse_scope(name, raw) for name, raw in raw_objects.items()}
     return Config(org=org, objects=objects, path=path)
@@ -94,14 +97,18 @@ def load_config(path: str | Path) -> Config:
 
     Raises:
         FileNotFoundError: if ``path`` does not exist.
-        ValueError: if the file is not valid TOML, or is structurally wrong.
+        ConfigError: if the file is not valid TOML, or is structurally wrong.
     """
     path = Path(path)
+    # utf-8-sig, not utf-8: PowerShell's Set-Content and Windows Notepad both
+    # write a UTF-8 BOM by default, and tomllib rejects one with "Invalid
+    # statement at line 1, column 1" — an error that tells the user nothing
+    # about the actual problem. Tolerate the BOM instead.
+    text = path.read_text(encoding="utf-8-sig")
     try:
-        with path.open("rb") as handle:
-            data = tomllib.load(handle)
+        data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"{path} is not valid TOML: {exc}") from exc
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
 
     return parse_config(data, path=path)
 

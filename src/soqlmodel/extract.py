@@ -9,15 +9,14 @@ The subprocess call and the parsing are separate functions on purpose: the
 parsing is where the bugs live, and it is testable without an org.
 """
 
+import codecs
 import json
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
-
-class SfCliError(RuntimeError):
-    """The ``sf`` CLI could not be run, or reported a failure."""
+from soqlmodel.errors import SfCliError, SnapshotError
 
 
 def unwrap_describe(payload: dict[str, Any]) -> dict[str, Any]:
@@ -28,12 +27,12 @@ def unwrap_describe(payload: dict[str, Any]) -> dict[str, Any]:
     so callers can feed this either shape.
 
     Raises:
-        ValueError: if the CLI reported a non-zero status.
+        SfCliError: if the CLI reported a non-zero status.
     """
     status = payload.get("status", 0)
     if status != 0:
         message = payload.get("message") or payload.get("name") or "no message"
-        raise ValueError(f"sf reported status {status}: {message}")
+        raise SfCliError(f"sf reported status {status}: {message}")
 
     if "result" not in payload:
         return payload
@@ -105,3 +104,40 @@ def write_snapshot(snapshot: dict[str, Any], path: str | Path) -> Path:
     text = json.dumps(snapshot, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
+
+
+def read_snapshot(path: str | Path) -> dict[str, Any]:
+    """Read a snapshot file, refusing bytes :func:`write_snapshot` would not write.
+
+    The pair matters: this is the only reader, so the rules about what a
+    snapshot file may contain live next to the rules about what one gets
+    written as.
+
+    A leading UTF-8 BOM is rejected rather than tolerated. ``soqlmodel.toml``
+    is hand-written and does tolerate one, because a Windows editor put it
+    there and the user should not have to care. A snapshot is only ever
+    written by us, so a BOM means the bytes on disk are no longer the bytes we
+    wrote — and reading through it would let `check` report "No drift" about a
+    file that does not match what `snapshot` produces. That is a silent wrong
+    answer about the one property snapshots exist to have (D13).
+
+    Raises:
+        SnapshotError: if the file leads with a BOM, or is not valid JSON.
+    """
+    path = Path(path)
+    raw = path.read_bytes()
+
+    if raw.startswith(codecs.BOM_UTF8):
+        raise SnapshotError(
+            f"{path} starts with a UTF-8 BOM, so it is not the file soqlmodel "
+            "wrote; re-run snapshot to rewrite it"
+        )
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise SnapshotError(f"{path} is not valid UTF-8: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        # A hand-edited snapshot. One line naming the file beats a raw
+        # JSONDecodeError, which names neither the file nor the fix.
+        raise SnapshotError(f"{path} is not valid JSON: {exc}") from exc

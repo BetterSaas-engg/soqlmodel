@@ -1,5 +1,26 @@
 # Known issues
 
+## RESOLVED — mypy tests failing locally (2026-08-09, cleared 2026-08-26)
+
+All five run and pass on this machine again, under mypy 2.3.0
+(compiled), and `uv run python -m mypy src/soqlmodel` reports "Success:
+no issues found in 11 source files". The Application Control policy
+below no longer blocks the extension.
+
+Kept rather than deleted, for two reasons. The block was environmental
+and can come back, so the symptom is worth recognising. And the
+reasoning in it still stands: if these ever fail to *run* again, they
+still must not be skipped. `pytest.exe` may still be blocked — `uv run
+python -m pytest` remains the way to run the suite.
+
+CI on a Linux runner (SFM-11) is still where the type-checking claim
+gets verified for real, since one machine's toolchain is not evidence
+about anyone else's.
+
+The original entry follows.
+
+---
+
 ## mypy tests failing locally (2026-08-09)
 
 Five tests that shell out to mypy fail with "DLL load failed while

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from soqlmodel.errors import GenerateError
 from soqlmodel.generate import (
     FALLBACK_TYPE,
     TYPE_MAP,
@@ -181,29 +182,29 @@ def test_write_module_is_byte_identical_across_writes(tmp_path):
 
 @pytest.mark.parametrize("bad", ["class", "import", "None", "lambda", "def"])
 def test_rejects_python_keywords_as_field_names(bad):
-    with pytest.raises(ValueError, match="not a usable Python identifier"):
+    with pytest.raises(GenerateError, match="not a usable Python identifier"):
         generate_module(make_snapshot(field(bad, "string")))
 
 
 @pytest.mark.parametrize("bad", ["My Field", "field-name", "2ndPlace", "weiße.spalte", ""])
 def test_rejects_non_identifier_field_names(bad):
-    with pytest.raises(ValueError, match="not a usable Python identifier"):
+    with pytest.raises(GenerateError, match="not a usable Python identifier"):
         generate_module(make_snapshot(field(bad, "string")))
 
 
 def test_the_guard_names_the_offending_field():
-    with pytest.raises(ValueError, match="My Field"):
+    with pytest.raises(GenerateError, match="My Field"):
         generate_module(make_snapshot(field("My Field", "string")))
 
 
 def test_rejects_an_unusable_sobject_name():
-    with pytest.raises(ValueError, match="sObject name"):
+    with pytest.raises(GenerateError, match="sObject name"):
         generate_module(make_snapshot(field("Name", "string"), sobject="My Object"))
 
 
 def test_does_not_silently_mangle():
     # Whatever else happens, a bad name must not turn into a plausible one.
-    with pytest.raises(ValueError):
+    with pytest.raises(GenerateError):
         generate_module(make_snapshot(field("field-name", "string")))
 
 

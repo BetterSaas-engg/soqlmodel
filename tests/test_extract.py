@@ -4,7 +4,13 @@ from unittest.mock import patch
 
 import pytest
 
-from soqlmodel.extract import fetch_describe, unwrap_describe, write_snapshot
+from soqlmodel.errors import SfCliError, SnapshotError
+from soqlmodel.extract import (
+    fetch_describe,
+    read_snapshot,
+    unwrap_describe,
+    write_snapshot,
+)
 
 
 def test_unwraps_the_cli_envelope():
@@ -22,19 +28,19 @@ def test_returns_already_unwrapped_payload_as_is():
 def test_raises_on_non_zero_status():
     payload = {"status": 1, "name": "NoOrgFound", "message": "No org found for alias Prod"}
 
-    with pytest.raises(ValueError, match="No org found for alias Prod"):
+    with pytest.raises(SfCliError, match="No org found for alias Prod"):
         unwrap_describe(payload)
 
 
 def test_raises_on_non_zero_status_even_when_a_result_is_present():
     payload = {"status": 1, "message": "partial failure", "result": {"name": "Account"}}
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SfCliError):
         unwrap_describe(payload)
 
 
 def test_error_message_survives_a_payload_with_no_message():
-    with pytest.raises(ValueError, match="status 68"):
+    with pytest.raises(SfCliError, match="status 68"):
         unwrap_describe({"status": 68})
 
 
@@ -112,3 +118,60 @@ def test_write_snapshot_round_trips(tmp_path):
     path = write_snapshot(snapshot, tmp_path / "snapshot.json")
 
     assert json.loads(path.read_text(encoding="utf-8")) == snapshot
+
+
+# --- read_snapshot ----------------------------------------------------------
+
+
+def test_read_snapshot_round_trips_what_write_snapshot_wrote(tmp_path):
+    snapshot = {"org": "Prod", "sobject": "Account", "fields": [{"name": "Größe__c"}]}
+    path = write_snapshot(snapshot, tmp_path / "snapshot.json")
+
+    assert read_snapshot(path) == snapshot
+
+
+def test_read_snapshot_refuses_a_utf8_bom(tmp_path):
+    # The guard proved to fail: the same bytes minus the BOM read fine below,
+    # so it is the BOM being rejected and not the content.
+    path = write_snapshot({"org": "Prod"}, tmp_path / "snapshot.json")
+    clean = path.read_bytes()
+    path.write_bytes(b"\xef\xbb\xbf" + clean)
+
+    with pytest.raises(SnapshotError, match="UTF-8 BOM"):
+        read_snapshot(path)
+
+    path.write_bytes(clean)
+    assert read_snapshot(path) == {"org": "Prod"}
+
+
+def test_read_snapshot_names_the_fix_for_a_bom(tmp_path):
+    path = write_snapshot({"org": "Prod"}, tmp_path / "snapshot.json")
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    with pytest.raises(SnapshotError, match="re-run snapshot to rewrite it"):
+        read_snapshot(path)
+
+
+def test_read_snapshot_keeps_a_bom_that_is_not_at_the_start(tmp_path):
+    # A U+FEFF inside a label is data, not a byte-order mark. Rejecting the
+    # file for it would be the guard overreaching.
+    snapshot = {"org": "Prod", "fields": [{"label": "a" + chr(0xFEFF) + "b"}]}
+    path = write_snapshot(snapshot, tmp_path / "snapshot.json")
+
+    assert read_snapshot(path) == snapshot
+
+
+def test_read_snapshot_reports_bad_json_with_the_filename(tmp_path):
+    path = tmp_path / "Account.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SnapshotError, match="Account.json is not valid JSON"):
+        read_snapshot(path)
+
+
+def test_read_snapshot_reports_bad_encoding_with_the_filename(tmp_path):
+    path = tmp_path / "Account.json"
+    path.write_bytes(b'{"org": "\xff\xfe"}')
+
+    with pytest.raises(SnapshotError, match="Account.json is not valid UTF-8"):
+        read_snapshot(path)

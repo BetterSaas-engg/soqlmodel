@@ -11,6 +11,8 @@ an already-extracted describe dict.
 from collections.abc import Iterable
 from typing import Any
 
+from soqlmodel.errors import SnapshotError
+
 # Bumped whenever a change to what we store alters the bytes of an existing
 # snapshot. Lets `check` tell "the format moved, regenerate" apart from
 # "the org's schema drifted" (D6).
@@ -47,12 +49,12 @@ def trim_field(field: dict[str, Any]) -> dict[str, Any]:
     strings (D4), and is omitted for fields left with no active values.
 
     Raises:
-        ValueError: if the field has no usable ``name``. That is a corrupt
+        SnapshotError: if the field has no usable ``name``. That is a corrupt
             payload, not an edge case — better to fail here than to emit a
             nameless field for the generator to choke on later.
     """
     if field.get("name") is None:
-        raise ValueError(f"describe field has no 'name': {field!r}")
+        raise SnapshotError(f"describe field has no 'name': {field!r}")
 
     trimmed = {
         prop: field[prop]
@@ -98,7 +100,7 @@ def _apply_scope(
         missing.append(f"{name!r}{f' (did you mean {suggestion!r}?)' if suggestion else ''}")
 
     if missing:
-        raise ValueError(
+        raise SnapshotError(
             f"{sobject}: requested field(s) not present in the org: "
             f"{', '.join(sorted(missing))}"
         )
@@ -147,13 +149,13 @@ def build_snapshot(
             what changed must not crash on the answer.
 
     Raises:
-        ValueError: if the payload has no ``name`` key, which means it is not a
+        SnapshotError: if the payload has no ``name`` key, which means it is not a
             describe result (most often the ``sf`` CLI envelope was passed in
             instead of its ``result`` value); or, under ``strict``, if a
             requested field does not exist on the sobject.
     """
     if "name" not in describe:
-        raise ValueError("describe payload has no 'name' key; not an sobject describe result")
+        raise SnapshotError("describe payload has no 'name' key; not an sobject describe result")
 
     trimmed = [trim_field(field) for field in describe.get("fields") or ()]
 

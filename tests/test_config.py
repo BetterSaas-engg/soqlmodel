@@ -8,6 +8,7 @@ from soqlmodel.config import (
     load_config,
     parse_config,
 )
+from soqlmodel.errors import ConfigError
 
 EXAMPLE = """
 org = "FULL Sandbox"
@@ -74,36 +75,53 @@ def test_org_is_optional():
 
 
 def test_rejects_a_non_string_org():
-    with pytest.raises(ValueError, match="org must be a string"):
+    with pytest.raises(ConfigError, match="org must be a string"):
         parse_config({"org": 42})
 
 
 def test_rejects_a_non_table_objects():
-    with pytest.raises(ValueError, match=r"\[objects\] must be a table"):
+    with pytest.raises(ConfigError, match=r"\[objects\] must be a table"):
         parse_config({"objects": ["Account"]})
 
 
 def test_rejects_a_non_list_scope():
-    with pytest.raises(ValueError, match="must be a list of field names"):
+    with pytest.raises(ConfigError, match="must be a list of field names"):
         parse_config({"objects": {"Account": "Name"}})
 
 
 def test_rejects_a_list_of_non_strings():
-    with pytest.raises(ValueError, match="must be a list of field names"):
+    with pytest.raises(ConfigError, match="must be a list of field names"):
         parse_config({"objects": {"Account": [1, 2]}})
 
 
 def test_rejects_an_empty_scope():
     # An empty list would select nothing, which is never what anyone means.
-    with pytest.raises(ValueError, match="empty list"):
+    with pytest.raises(ConfigError, match="empty list"):
         parse_config({"objects": {"Account": []}})
 
 
 def test_rejects_invalid_toml(tmp_path):
     path = write_config(tmp_path, "org = [unclosed")
 
-    with pytest.raises(ValueError, match="not valid TOML"):
+    with pytest.raises(ConfigError, match="not valid TOML"):
         load_config(path)
+
+
+def test_a_utf8_bom_is_tolerated(tmp_path):
+    # PowerShell's Set-Content and Notepad both write one by default, and
+    # tomllib rejects it with an error that names line 1 column 1 and explains
+    # nothing. Found running the CLI on Windows for the first time.
+    path = tmp_path / CONFIG_FILENAME
+    path.write_bytes(b"\xef\xbb\xbf" + EXAMPLE.encode("utf-8"))
+
+    assert load_config(path).org == "FULL Sandbox"
+
+
+def test_non_ascii_in_the_config_survives(tmp_path):
+    path = tmp_path / CONFIG_FILENAME
+    path.write_text('org = "Größe"\n', encoding="utf-8")
+
+    assert load_config(path).org == "Größe"
 
 
 def test_missing_file_raises(tmp_path):

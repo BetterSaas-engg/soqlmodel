@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from soqlmodel.describe import SNAPSHOT_FORMAT_VERSION
+from soqlmodel.errors import GenerateError
 
 # The one place a Salesforce type becomes a Python type. Keyed on the
 # snapshot's "type" value — we do not store soapType (D3).
@@ -58,7 +59,7 @@ def python_type_for(salesforce_type: str) -> str:
 
 def _check_identifier(name: str, what: str) -> None:
     if not name.isidentifier() or keyword.iskeyword(name):
-        raise ValueError(
+        raise GenerateError(
             f"{what} {name!r} is not a usable Python identifier; "
             "refusing to generate a module with a mangled name"
         )
@@ -122,7 +123,7 @@ def generate_combined_module(snapshots: Sequence[dict[str, Any]]) -> str:
     byte-identical text no matter what order they arrive in.
 
     Raises:
-        ValueError: if an sObject or field name is not a usable Python
+        GenerateError: if an sObject or field name is not a usable Python
             identifier. Mangling it silently would produce a model whose
             attribute names do not match the org.
     """

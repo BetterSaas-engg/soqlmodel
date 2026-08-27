@@ -374,3 +374,113 @@ live side is built with `strict=False` (D9), which is load-bearing: a
 declared field that has vanished is the most important drift case there
 is, and under `strict=True` it would arrive as a traceback instead of
 the CRITICAL line it deserves.
+
+## D11 — Two error hierarchies: user failure vs. bug (2026-08-26)
+
+**Context:** The CLI turns an exception into `soqlmodel: <message>` and
+exit 2. The first version caught `(ValueError, OSError, SfCliError)`.
+`ValueError` is raised throughout the standard library and throughout
+this codebase, so a genuine bug — a stray `ValueError` from the query
+builder, a `JSONDecodeError` from a half-written file — would be dressed
+up as a tidy one-line user error with the traceback suppressed. That is
+a plausible outcome in place of an error, which is the single failure
+mode this project exists to prevent. A drift detector that reports a
+defect as "bad config" is worse than one that crashes.
+
+**Decision:** Two kinds of failure, and the type says which.
+
+A **user failure** is a wrong config, an unreachable org, a declared
+field the org does not have. Every one of them raises a subclass of
+`SoqlModelError`, defined in `errors.py`, one class per stage:
+`ConfigError`, `SfCliError`, `SnapshotError`, `GenerateError`, plus
+`MissingSnapshotError`. The CLI catches `(SoqlModelError, OSError)` and
+nothing else.
+
+A **programming failure** is a caller misusing the library: ordering by
+a `Field` from another sObject, comparing against a naive datetime,
+`limit(0)`. Those keep raising plain `ValueError` and `TypeError`. The
+CLI does not catch them, so they reach the user as a traceback — the
+correct output for a bug.
+
+**Nothing in `errors.py` subclasses `ValueError`.** The whole value of
+the split is that `except SoqlModelError` cannot swallow a defect, and a
+`ValueError` base would hand that property straight back. It is asserted
+in `tests/test_errors.py` rather than left to convention.
+
+`MissingSnapshotError` inherits both `SoqlModelError` and
+`FileNotFoundError`. It is a user failure *and* it is literally a
+missing file; code that already catches the stdlib class keeps working.
+
+**Consequence:** `query.py` and `fields.py` are the only modules that
+still raise bare `ValueError`/`TypeError`, and that is the tell for
+"this is the caller's bug, not the user's mistake". A new raise site has
+to answer which kind it is before it can pick a class. The reverse cost
+is real: `json.JSONDecodeError` is a `ValueError`, so a corrupt snapshot
+stopped being caught for free and had to be wrapped deliberately in
+`read_snapshot` — which is the point. Failures are now caught because
+someone decided they should be, not because they happened to share a
+base class with everything else.
+
+## D12 — Global options resolve to the later occurrence (2026-08-26)
+
+**Context:** `--config`, `--schema-dir` and `--org` are accepted on both
+sides of the subcommand, because both `soqlmodel --schema-dir x check`
+and `soqlmodel check --schema-dir x` are things people type. That makes
+`soqlmodel --schema-dir a snapshot --schema-dir b` legal and ambiguous.
+Argparse resolves it one way by accident; leaving it there means the
+answer is whatever the implementation happens to do this release.
+
+**Decision:** **The occurrence after COMMAND wins.** Stated in
+`--help`, and pinned by test at both the parser level and through
+`main`.
+
+It is the same rule argparse already applies to an option repeated in
+one position — last wins — so there is one rule rather than a special
+case for the subcommand boundary. `default=argparse.SUPPRESS` on the
+shared options is what makes the other direction work: an option the
+user did not type leaves no attribute behind, so the subparser's copy
+cannot overwrite a value given before COMMAND with a default.
+
+**Consequence:** SUPPRESS is load-bearing, not a stylistic choice —
+removing it silently makes an option given before the subcommand
+disappear. A mutation dropping it fails 25 tests.
+
+## D13 — A snapshot with a BOM is refused; the config tolerates one (2026-08-26)
+
+**Context:** `soqlmodel.toml` reads as `utf-8-sig` because PowerShell's
+`Set-Content` and Notepad both write a UTF-8 BOM and `tomllib` rejects
+it with an error naming line 1 column 1 and nothing else. The same
+tolerance was extended to snapshot files. That was wrong, and in a
+specific way: a BOM'd snapshot parsed clean, `check` reported "No
+drift", and the bytes on disk were no longer the bytes `snapshot`
+writes. The next `snapshot` run would silently drop the BOM and produce
+a diff with no schema change behind it — phantom drift, from the tool
+whose job is to not produce it.
+
+**Decision:** The two files have different provenance, so they get
+different policies.
+
+`soqlmodel.toml` is **hand-written**, so it keeps tolerating a BOM. A
+user editing a config in Notepad should not have to know what a byte
+order mark is.
+
+A snapshot is **only ever written by us**, so a BOM means the bytes on
+disk are not the bytes we wrote. `read_snapshot` refuses it and names
+the fix: re-run `snapshot`. Exit 2, not exit 1 — the check could not be
+trusted, so it did not run, the same reasoning that makes a
+`format_version` mismatch fail loudly under D10 rather than report
+"clean" from a diff that never happened.
+
+`read_snapshot` is the only reader, and it lives beside `write_snapshot`
+so the rules about what a snapshot file may contain sit next to the
+rules about how one gets written. `check` and `generate` both go through
+it. It also wraps `JSONDecodeError` and `UnicodeDecodeError` into
+`SnapshotError` naming the file, which under D11 they now need.
+
+**Consequence:** "check is clean" means the committed file is what
+`snapshot` produces, not merely something that parses to the same dict.
+A U+FEFF *inside* a value is still data and is left alone — the guard is
+about the first three bytes, not about the character. This does not yet
+close the general case: a snapshot reindented by hand still parses to
+the same dict and still reports clean. Canonical-form checking is a
+larger idea and is not in v1.

@@ -4,6 +4,7 @@ import pytest
 
 from soqlmodel.check import Severity, exit_code, has_critical
 from soqlmodel.config import Config
+from soqlmodel.errors import ConfigError, SnapshotError
 from soqlmodel.project import (
     MissingSnapshotError,
     check_all,
@@ -103,12 +104,12 @@ def test_snapshots_are_scoped_to_the_config(org, tmp_path):
 
 
 def test_snapshot_all_is_strict_about_declared_fields(org, tmp_path):
-    with pytest.raises(ValueError, match="Account: requested field"):
+    with pytest.raises(SnapshotError, match="Account: requested field"):
         snapshot_all(config(Account=frozenset({"Name", "Nope__c"})), tmp_path)
 
 
 def test_the_strict_error_names_the_object_and_field(org, tmp_path):
-    with pytest.raises(ValueError, match="'Nope__c'"):
+    with pytest.raises(SnapshotError, match="'Nope__c'"):
         snapshot_all(config(Account=frozenset({"Nope__c"})), tmp_path)
 
 
@@ -121,12 +122,12 @@ def test_snapshot_all_is_deterministic(org, tmp_path):
 
 
 def test_snapshot_all_needs_an_org(org, tmp_path):
-    with pytest.raises(ValueError, match="no org configured"):
+    with pytest.raises(ConfigError, match="no org configured"):
         snapshot_all(Config(objects={"Account": None}), tmp_path)
 
 
 def test_snapshot_all_needs_objects(org, tmp_path):
-    with pytest.raises(ValueError, match="no sObjects configured"):
+    with pytest.raises(ConfigError, match="no sObjects configured"):
         snapshot_all(Config(org=ORG), tmp_path)
 
 
@@ -221,6 +222,35 @@ def test_the_generated_module_type_checks(org, tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+# --- both writers create their directory, through the same helper -----------
+
+
+def test_generate_all_creates_a_missing_output_directory(org, tmp_path):
+    snapshot_all(config(), tmp_path)
+
+    out = generate_all(config(), tmp_path, tmp_path / "deep" / "nested" / "models.py")
+
+    assert out.is_file()
+
+
+def test_generate_all_handles_a_bare_filename(org, monkeypatch, tmp_path):
+    """The default `--output models.py`, whose `.parent` is `Path(".")`.
+
+    Pins that mkdir on it is harmless, which is what lets `_ensure_dir` carry
+    no special case for it.
+    """
+    snapshot_all(config(), tmp_path / "schema")
+    monkeypatch.chdir(tmp_path)
+
+    assert generate_all(config(), tmp_path / "schema", "models.py").is_file()
+
+
+def test_snapshot_all_creates_a_missing_schema_directory(org, tmp_path):
+    written = snapshot_all(config(), tmp_path / "deep" / "nested")
+
+    assert all(path.is_file() for path in written)
+
+
 # --- orphans ----------------------------------------------------------------
 
 
@@ -262,6 +292,41 @@ def test_committed_sobjects_lists_what_is_on_disk(org, tmp_path):
 
 def test_committed_sobjects_is_empty_for_a_missing_directory(tmp_path):
     assert committed_sobjects(tmp_path / "nope") == []
+
+
+def test_a_snapshot_with_a_utf8_bom_is_refused(org, tmp_path):
+    # A snapshot that has been through a BOM-writing editor or a Windows shell
+    # redirect. Tolerating it would let `check` say "no drift" about bytes that
+    # are not the ones `snapshot` writes (D13). soqlmodel.toml still tolerates
+    # a BOM — it is hand-written, this is not.
+    snapshot_all(config(Account=None), tmp_path)
+    path = snapshot_path("Account", tmp_path)
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    with pytest.raises(SnapshotError, match="UTF-8 BOM"):
+        load_snapshot("Account", tmp_path)
+
+
+def test_check_refuses_a_bom_rather_than_reporting_no_drift(org, tmp_path):
+    """The guard's whole reason to exist: check must not call this clean."""
+    snapshot_all(config(Account=None), tmp_path)
+    path = snapshot_path("Account", tmp_path)
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+
+    with pytest.raises(SnapshotError, match="re-run snapshot"):
+        check_all(config(Account=None), tmp_path)
+
+
+def test_re_running_snapshot_heals_a_bom(org, tmp_path):
+    """And the fix the error names actually works."""
+    written = snapshot_all(config(Account=None), tmp_path)
+    clean = written[0].read_bytes()
+    written[0].write_bytes(b"\xef\xbb\xbf" + clean)
+
+    snapshot_all(config(Account=None), tmp_path)
+
+    assert written[0].read_bytes() == clean
+    assert check_all(config(Account=None), tmp_path) == []
 
 
 # --- check_all --------------------------------------------------------------

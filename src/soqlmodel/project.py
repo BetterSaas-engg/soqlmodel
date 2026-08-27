@@ -14,21 +14,27 @@ classification or rendering logic of its own — `describe`, `generate` and
 `check` do that, and stay independently testable.
 """
 
-import json
 from pathlib import Path
 from typing import Any
 
 from soqlmodel.check import Change, Severity, check, sort_changes
 from soqlmodel.config import Config
 from soqlmodel.describe import build_snapshot
-from soqlmodel.extract import fetch_describe, write_snapshot
+from soqlmodel.errors import ConfigError, SoqlModelError
+from soqlmodel.extract import fetch_describe, read_snapshot, write_snapshot
 from soqlmodel.generate import write_combined_module
 
 DEFAULT_SCHEMA_DIR = "schema"
 
 
-class MissingSnapshotError(FileNotFoundError):
-    """A configured sObject has no committed snapshot yet."""
+class MissingSnapshotError(SoqlModelError, FileNotFoundError):
+    """A configured sObject has no committed snapshot yet.
+
+    Both bases are deliberate. It is a ``SoqlModelError`` because it is a user
+    failure the CLI reports as one line, and it stays a ``FileNotFoundError``
+    because that is what it literally is — code that already catches the
+    latter keeps working.
+    """
 
 
 def snapshot_path(sobject: str, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> Path:
@@ -57,9 +63,24 @@ def orphaned_snapshots(
     return [name for name in committed_sobjects(schema_dir) if name not in declared]
 
 
+def _ensure_dir(directory: Path) -> None:
+    """Create a directory something is about to be written into.
+
+    The one copy of this, shared by both writers.
+
+    No guard against the bare-filename case is needed, which is worth writing
+    down because it does not look that way: ``Path("models.py").parent`` is
+    ``Path(".")``, and ``exist_ok=True`` already makes mkdir on an existing
+    directory a no-op. An earlier version tested for it explicitly. That
+    branch could never be observed failing, which is the tell for a guard that
+    is not guarding anything.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def _require_org(config: Config) -> str:
     if not config.org:
-        raise ValueError(
+        raise ConfigError(
             'no org configured; set org = "<alias>" in soqlmodel.toml'
         )
     return config.org
@@ -67,7 +88,7 @@ def _require_org(config: Config) -> str:
 
 def _require_objects(config: Config) -> list[str]:
     if not config.is_scoped:
-        raise ValueError(
+        raise ConfigError(
             "no sObjects configured; add an [objects] table to soqlmodel.toml, "
             'e.g. Account = ["*"]'
         )
@@ -80,13 +101,14 @@ def load_snapshot(sobject: str, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> 
     Raises:
         MissingSnapshotError: if the file is not there, naming the command that
             would create it.
+        SnapshotError: if the file is there but is not what `snapshot` wrote.
     """
     path = snapshot_path(sobject, schema_dir)
     if not path.is_file():
         raise MissingSnapshotError(
             f"no snapshot for {sobject} at {path}; run snapshot first to create it"
         )
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_snapshot(path)
 
 
 def snapshot_all(
@@ -104,7 +126,7 @@ def snapshot_all(
     sobjects = _require_objects(config)
 
     directory = Path(schema_dir)
-    directory.mkdir(parents=True, exist_ok=True)
+    _ensure_dir(directory)
 
     written = []
     for sobject in sobjects:
@@ -140,7 +162,10 @@ def generate_all(
     names = sorted(set(required) | set(committed_sobjects(schema_dir)))
     snapshots = [load_snapshot(name, schema_dir) for name in names]
 
-    return write_combined_module(snapshots, out_path)
+    destination = Path(out_path)
+    _ensure_dir(destination.parent)
+
+    return write_combined_module(snapshots, destination)
 
 
 def check_all(

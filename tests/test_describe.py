@@ -3,6 +3,7 @@ import json
 import pytest
 
 from soqlmodel.describe import build_snapshot, missing_fields, trim_field
+from soqlmodel.errors import SnapshotError
 
 
 def make_field(name: str, **overrides: object) -> dict:
@@ -187,7 +188,7 @@ def test_snapshot_carries_a_format_version_first():
 
 
 def test_trim_field_rejects_a_field_with_no_name():
-    with pytest.raises(ValueError, match="no 'name'"):
+    with pytest.raises(SnapshotError, match="no 'name'"):
         trim_field({"type": "string", "label": "Nameless"})
 
 
@@ -196,12 +197,12 @@ def test_trim_field_rejects_a_null_name():
     field = make_field("Name")
     field["name"] = None
 
-    with pytest.raises(ValueError, match="no 'name'"):
+    with pytest.raises(SnapshotError, match="no 'name'"):
         trim_field(field)
 
 
 def test_nameless_field_error_names_the_offending_field():
-    with pytest.raises(ValueError, match="Nameless"):
+    with pytest.raises(SnapshotError, match="Nameless"):
         trim_field({"type": "string", "label": "Nameless"})
 
 
@@ -271,17 +272,17 @@ def test_an_empty_scope_selects_nothing_but_is_not_an_error():
 
 def test_a_requested_field_the_org_lacks_is_an_error():
     # Drift the caller needs to hear about now, not silently empty output.
-    with pytest.raises(ValueError, match="not present in the org"):
+    with pytest.raises(SnapshotError, match="not present in the org"):
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Contract_End__c"])
 
 
 def test_the_error_names_the_missing_field_and_the_sobject():
-    with pytest.raises(ValueError, match="Account: .*'Contract_End__c'"):
+    with pytest.raises(SnapshotError, match="Account: .*'Contract_End__c'"):
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Contract_End__c"])
 
 
 def test_the_error_names_every_missing_field():
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(SnapshotError) as exc:
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Nope__c", "AlsoNope__c"])
 
     assert "'Nope__c'" in str(exc.value)
@@ -289,13 +290,13 @@ def test_the_error_names_every_missing_field():
 
 
 def test_a_case_mismatch_suggests_the_real_field():
-    with pytest.raises(ValueError, match="did you mean 'AnnualRevenue'"):
+    with pytest.raises(SnapshotError, match="did you mean 'AnnualRevenue'"):
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["annualrevenue"])
 
 
 def test_scoping_is_case_sensitive():
     # Salesforce API names have exact casing; we do not guess, we report.
-    with pytest.raises(ValueError, match="not present in the org"):
+    with pytest.raises(SnapshotError, match="not present in the org"):
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["name"])
 
 
@@ -303,7 +304,7 @@ def test_scoping_is_case_sensitive():
 
 
 def test_strict_is_the_default():
-    with pytest.raises(ValueError):
+    with pytest.raises(SnapshotError):
         build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Gone__c"])
 
 
@@ -368,7 +369,7 @@ def test_non_strict_snapshots_are_deterministic():
 def test_build_snapshot_rejects_a_nameless_field():
     describe = {"name": "Account", "fields": [make_field("Id"), {"type": "string"}]}
 
-    with pytest.raises(ValueError, match="no 'name'"):
+    with pytest.raises(SnapshotError, match="no 'name'"):
         build_snapshot(describe, org="Prod")
 
 
@@ -378,7 +379,7 @@ def test_handles_describe_with_no_fields():
 
 def test_raises_on_payload_without_name():
     # The sf CLI envelope is the realistic mistake: describe lives under "result".
-    with pytest.raises(ValueError):
+    with pytest.raises(SnapshotError):
         build_snapshot({"status": 0, "result": {"name": "Account"}}, org="Prod")
 
 

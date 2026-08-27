@@ -10,7 +10,6 @@ query depends on. Getting that line wrong in either direction is how a drift
 detector becomes noise and then gets muted (D10).
 """
 
-import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -18,7 +17,7 @@ from typing import Any
 
 from soqlmodel.config import Config
 from soqlmodel.describe import SNAPSHOT_FORMAT_VERSION, build_snapshot, missing_fields
-from soqlmodel.extract import fetch_describe
+from soqlmodel.extract import fetch_describe, read_snapshot
 
 
 class Severity(StrEnum):
@@ -205,9 +204,13 @@ def check(config: Config, snapshot_path: str | Path) -> list[Change]:
 
     ``strict=False`` on the live build is load-bearing: a declared field that
     has vanished must arrive as a CRITICAL line, not as an exception (D9).
+
+    Reads through :func:`read_snapshot` rather than parsing the file here, so
+    "no drift" can only be said about a file that is byte-for-byte what
+    `snapshot` writes (D13).
     """
     snapshot_path = Path(snapshot_path)
-    committed = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    committed = read_snapshot(snapshot_path)
 
     sobject = committed["sobject"]
     org = config.org or committed["org"]
