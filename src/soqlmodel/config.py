@@ -61,8 +61,7 @@ class Config:
 def _parse_scope(sobject: str, raw: Any) -> Scope:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ConfigError(
-            f"[objects] {sobject} must be a list of field names, or [\"*\"]; "
-            f"got {raw!r}"
+            f'[objects] {sobject} must be a list of field names, or ["*"]; got {raw!r}'
         )
     if not raw:
         raise ConfigError(

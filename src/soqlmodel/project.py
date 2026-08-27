@@ -50,9 +50,7 @@ def committed_sobjects(schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> list[str]
     return sorted(path.stem for path in directory.glob("*.json"))
 
 
-def orphaned_snapshots(
-    config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR
-) -> list[str]:
+def orphaned_snapshots(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> list[str]:
     """Committed snapshots for sObjects the config no longer declares.
 
     Reported, never deleted: a user's committed file is not ours to remove,
@@ -80,17 +78,14 @@ def _ensure_dir(directory: Path) -> None:
 
 def _require_org(config: Config) -> str:
     if not config.org:
-        raise ConfigError(
-            'no org configured; set org = "<alias>" in soqlmodel.toml'
-        )
+        raise ConfigError('no org configured; set org = "<alias>" in soqlmodel.toml')
     return config.org
 
 
 def _require_objects(config: Config) -> list[str]:
     if not config.is_scoped:
         raise ConfigError(
-            "no sObjects configured; add an [objects] table to soqlmodel.toml, "
-            'e.g. Account = ["*"]'
+            'no sObjects configured; add an [objects] table to soqlmodel.toml, e.g. Account = ["*"]'
         )
     return config.sobjects()
 
@@ -111,9 +106,7 @@ def load_snapshot(sobject: str, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> 
     return read_snapshot(path)
 
 
-def snapshot_all(
-    config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR
-) -> list[Path]:
+def snapshot_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> list[Path]:
     """Extract every configured sObject and write its scoped snapshot.
 
     Strict (D9): a declared field the org does not have raises, naming the
@@ -131,9 +124,7 @@ def snapshot_all(
     written = []
     for sobject in sobjects:
         describe = fetch_describe(sobject, org)
-        snapshot = build_snapshot(
-            describe, org=org, fields=config.scope_for(sobject), strict=True
-        )
+        snapshot = build_snapshot(describe, org=org, fields=config.scope_for(sobject), strict=True)
         written.append(write_snapshot(snapshot, snapshot_path(sobject, directory)))
     return written
 
@@ -168,9 +159,7 @@ def generate_all(
     return write_combined_module(snapshots, destination)
 
 
-def check_all(
-    config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR
-) -> list[Change]:
+def check_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> list[Change]:
     """Diff every committed snapshot against a fresh extract.
 
     Non-strict (D9): a declared field that has been deleted arrives as a

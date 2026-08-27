@@ -27,11 +27,7 @@ from soqlmodel.fields import Condition, Field
 
 def _model_fields(model: type) -> dict[str, Field[Any]]:
     """The Field descriptors declared on a generated model class."""
-    return {
-        name: value
-        for name, value in vars(model).items()
-        if isinstance(value, Field)
-    }
+    return {name: value for name, value in vars(model).items() if isinstance(value, Field)}
 
 
 class Query:
@@ -119,8 +115,7 @@ class Query:
         """
         if not isinstance(condition, Condition):
             raise TypeError(
-                f"expected a filter condition, got {type(condition).__name__}: "
-                f"{condition!r}"
+                f"expected a filter condition, got {type(condition).__name__}: {condition!r}"
             )
 
         for field in sorted(condition.fields(), key=lambda f: f.name):
@@ -142,8 +137,7 @@ class Query:
 
         if self._order_by:
             terms = ", ".join(
-                f"{field.name} DESC" if desc else field.name
-                for field, desc in self._order_by
+                f"{field.name} DESC" if desc else field.name for field, desc in self._order_by
             )
             parts.append(f"ORDER BY {terms}")
 
@@ -167,10 +161,7 @@ def select(model: type, *fields: Field[Any]) -> Query:
             model.
     """
     if not fields:
-        raise ValueError(
-            f"select({model.__name__}) needs at least one field; "
-            "SOQL has no SELECT *"
-        )
+        raise ValueError(f"select({model.__name__}) needs at least one field; SOQL has no SELECT *")
 
     query = Query(model=model, fields=fields)
     for field in fields:

@@ -74,9 +74,7 @@ def test_the_type_map_is_the_only_mapping():
 def test_renders_a_field_with_its_salesforce_type_preserved():
     source = generate_module(make_snapshot(field("AnnualRevenue", "currency")))
 
-    assert (
-        '    AnnualRevenue: Field[float] = Field("AnnualRevenue", "currency")' in source
-    )
+    assert '    AnnualRevenue: Field[float] = Field("AnnualRevenue", "currency")' in source
 
 
 def test_compound_types_render_as_any():
@@ -109,9 +107,7 @@ def test_a_snapshot_with_no_fields_still_produces_a_valid_class():
 
 
 def test_fields_keep_snapshot_order():
-    source = generate_module(
-        make_snapshot(field("Zeta", "string"), field("Alpha", "string"))
-    )
+    source = generate_module(make_snapshot(field("Zeta", "string"), field("Alpha", "string")))
 
     assert source.index("Zeta") < source.index("Alpha")
 

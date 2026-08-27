@@ -35,9 +35,7 @@ def test_reads_the_org():
 def test_a_field_list_scopes_to_those_fields(tmp_path):
     config = load_config(write_config(tmp_path))
 
-    assert config.scope_for("Account") == frozenset(
-        {"Name", "AnnualRevenue", "Contract_End__c"}
-    )
+    assert config.scope_for("Account") == frozenset({"Name", "AnnualRevenue", "Contract_End__c"})
 
 
 def test_star_means_every_field(tmp_path):

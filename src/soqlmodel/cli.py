@@ -105,9 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         parents=[common],
     )
-    parser.add_argument(
-        "--version", action="version", version=f"soqlmodel {_package_version()}"
-    )
+    parser.add_argument("--version", action="version", version=f"soqlmodel {_package_version()}")
 
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -153,8 +151,7 @@ def _load(args: argparse.Namespace) -> Config:
     path = Path(getattr(args, "config", CONFIG_FILENAME))
     if not path.is_file():
         raise ConfigError(
-            f"no config at {path}; create one declaring the sObjects this "
-            "project depends on"
+            f"no config at {path}; create one declaring the sObjects this project depends on"
         )
 
     config = load_config(path)

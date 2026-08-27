@@ -107,9 +107,7 @@ def _compare_field(
         warning(f'value added "{value}"')
 
     if committed.get("nillable") != live.get("nillable"):
-        warning(
-            f"nillable changed from {committed.get('nillable')} to {live.get('nillable')}"
-        )
+        warning(f"nillable changed from {committed.get('nillable')} to {live.get('nillable')}")
 
     for prop in ("length", "precision", "scale"):
         if committed.get(prop) != live.get(prop):
@@ -164,9 +162,7 @@ def diff_snapshots(committed: dict[str, Any], live: dict[str, Any]) -> list[Chan
         )
 
     for name in sorted(set(now) - set(was)):
-        changes.append(
-            Change(Severity.WARNING, sobject, name, "new field appeared")
-        )
+        changes.append(Change(Severity.WARNING, sobject, name, "new field appeared"))
 
     for name in sorted(set(was) & set(now)):
         changes.extend(_compare_field(sobject, name, was[name], now[name]))

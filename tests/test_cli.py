@@ -412,9 +412,7 @@ def test_the_wheel_declares_the_console_script(tmp_path):
 
     wheel = next(iter(tmp_path.glob("*.whl")))
     with zipfile.ZipFile(wheel) as archive:
-        entry_points = archive.read(
-            "soqlmodel-0.1.0.dist-info/entry_points.txt"
-        ).decode()
+        entry_points = archive.read("soqlmodel-0.1.0.dist-info/entry_points.txt").decode()
 
     assert "[console_scripts]" in entry_points
     assert "soqlmodel = soqlmodel.cli:main" in entry_points
@@ -427,9 +425,7 @@ def test_the_installed_entry_point_runs(project):
     if executable is None:
         pytest.fail("the 'soqlmodel' console script is not on PATH")
 
-    result = subprocess.run(
-        [executable, "--version"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run([executable, "--version"], capture_output=True, text=True, check=False)
 
     assert result.returncode == EXIT_OK, result.stdout + result.stderr
     assert "soqlmodel" in result.stdout

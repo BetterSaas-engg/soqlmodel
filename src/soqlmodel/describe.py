@@ -57,9 +57,7 @@ def trim_field(field: dict[str, Any]) -> dict[str, Any]:
         raise SnapshotError(f"describe field has no 'name': {field!r}")
 
     trimmed = {
-        prop: field[prop]
-        for prop in _KEPT_PROPERTIES
-        if prop in field and field[prop] is not None
+        prop: field[prop] for prop in _KEPT_PROPERTIES if prop in field and field[prop] is not None
     }
 
     picklist_values = sorted(
@@ -101,8 +99,7 @@ def _apply_scope(
 
     if missing:
         raise SnapshotError(
-            f"{sobject}: requested field(s) not present in the org: "
-            f"{', '.join(sorted(missing))}"
+            f"{sobject}: requested field(s) not present in the org: {', '.join(sorted(missing))}"
         )
 
     return kept

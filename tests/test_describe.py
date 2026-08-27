@@ -240,17 +240,13 @@ def test_scoped_snapshot_records_what_was_requested():
 
 
 def test_requested_fields_are_sorted_and_deduped():
-    snapshot = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Website", "Name", "Website"]
-    )
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Website", "Name", "Website"])
 
     assert snapshot["requested_fields"] == ["Name", "Website"]
 
 
 def test_scoping_preserves_field_sort_order():
-    snapshot = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Website", "AnnualRevenue"]
-    )
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Website", "AnnualRevenue"])
 
     assert [f["name"] for f in snapshot["fields"]] == ["AnnualRevenue", "Website"]
 
@@ -310,9 +306,7 @@ def test_strict_is_the_default():
 
 def test_non_strict_does_not_raise_on_a_missing_field():
     # `check` asks what changed. It must not crash on the answer.
-    snapshot = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
-    )
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False)
 
     assert [f["name"] for f in snapshot["fields"]] == ["Name"]
 
@@ -320,9 +314,7 @@ def test_non_strict_does_not_raise_on_a_missing_field():
 def test_non_strict_still_records_what_was_requested():
     # The declaration survives even though the field did not: that is what
     # lets check say "a field you declared is gone".
-    snapshot = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
-    )
+    snapshot = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False)
 
     assert snapshot["requested_fields"] == ["Gone__c", "Name"]
 
@@ -348,20 +340,14 @@ def test_missing_fields_is_empty_for_an_unscoped_snapshot():
 
 def test_strictness_does_not_change_a_snapshot_with_nothing_missing():
     strict = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"])
-    lenient = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"], strict=False
-    )
+    lenient = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Website"], strict=False)
 
     assert json.dumps(strict) == json.dumps(lenient)
 
 
 def test_non_strict_snapshots_are_deterministic():
-    first = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Gone__c", "Name"], strict=False
-    )
-    second = build_snapshot(
-        SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False
-    )
+    first = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Gone__c", "Name"], strict=False)
+    second = build_snapshot(SCOPED_DESCRIBE, org="Prod", fields=["Name", "Gone__c"], strict=False)
 
     assert json.dumps(first) == json.dumps(second)
 

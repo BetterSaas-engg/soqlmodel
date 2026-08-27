@@ -59,9 +59,7 @@ def test_orders_descending():
 
 
 def test_desc_applies_to_every_field_in_the_call():
-    query = select(Account, Account.Name).order_by(
-        Account.Name, Account.AnnualRevenue, desc=True
-    )
+    query = select(Account, Account.Name).order_by(Account.Name, Account.AnnualRevenue, desc=True)
 
     assert "ORDER BY Name DESC, AnnualRevenue DESC" in str(query)
 
@@ -92,9 +90,7 @@ def test_desc_does_not_mutate_the_original():
 
 def test_successive_where_calls_and_together():
     query = (
-        select(Account, Account.Name)
-        .where(Account.Name == "Acme")
-        .where(Account.AnnualRevenue > 1)
+        select(Account, Account.Name).where(Account.Name == "Acme").where(Account.AnnualRevenue > 1)
     )
 
     assert "WHERE (Name = 'Acme') AND (AnnualRevenue > 1)" in str(query)
@@ -121,13 +117,9 @@ def test_or_renders_both_sides_parenthesized():
 
 
 def test_nested_combinations_keep_their_shape():
-    condition = ((Account.Name == "A") | (Account.Name == "B")) & (
-        Account.AnnualRevenue > 10
-    )
+    condition = ((Account.Name == "A") | (Account.Name == "B")) & (Account.AnnualRevenue > 10)
 
-    assert condition.render() == (
-        "((Name = 'A') OR (Name = 'B')) AND (AnnualRevenue > 10)"
-    )
+    assert condition.render() == ("((Name = 'A') OR (Name = 'B')) AND (AnnualRevenue > 10)")
 
 
 def test_and_keyword_still_raises():
@@ -212,9 +204,7 @@ def test_rejects_a_condition_on_a_foreign_field():
 
 def test_rejects_a_foreign_field_inside_a_composite():
     with pytest.raises(ValueError, match="not a field of Account"):
-        select(Account, Account.Name).where(
-            (Account.Name == "Acme") & (Contact.Email == "a@b.com")
-        )
+        select(Account, Account.Name).where((Account.Name == "Acme") & (Contact.Email == "a@b.com"))
 
 
 def test_rejects_a_shared_field_name_from_another_sobject_in_where():
@@ -241,9 +231,7 @@ def test_rejects_a_shared_field_name_nested_in_a_composite():
     when = datetime(2026, 8, 9, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="not a field of Account"):
-        select(Account, Account.Name).where(
-            (Account.Name == "Acme") & (Contact.CreatedDate > when)
-        )
+        select(Account, Account.Name).where((Account.Name == "Acme") & (Contact.CreatedDate > when))
 
 
 def test_the_error_lists_the_known_fields():
@@ -394,7 +382,7 @@ def test_payload_in_a_composite_is_escaped_on_both_sides():
 def test_escaping_lives_in_one_place():
     # query.py must not grow a second implementation: the rendered literal is
     # exactly what escape_string produces.
-    payload = "O'Brien\\\n\"x\""
+    payload = 'O\'Brien\\\n"x"'
     rendered = str(select(Account, Account.Name).where(Account.Name == payload))
 
     assert rendered.endswith(f"'{escape_string(payload)}'")
