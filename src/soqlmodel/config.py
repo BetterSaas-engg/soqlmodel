@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from soqlmodel.errors import ConfigError
+from soqlmodel.generate import DEFAULT_LINE_LENGTH
 
 CONFIG_FILENAME = "soqlmodel.toml"
 
@@ -39,6 +40,9 @@ class Config:
     org: str | None = None
     objects: dict[str, Scope] = dataclasses.field(default_factory=dict)
     path: Path | None = None
+    # Matches the formatter the generated module will be checked by. 88 is
+    # ruff and Black's default, so most projects never set it (D18).
+    line_length: int = DEFAULT_LINE_LENGTH
 
     @property
     def is_scoped(self) -> bool:
@@ -80,6 +84,12 @@ def parse_config(data: dict[str, Any], path: Path | None = None) -> Config:
     if org is not None and not isinstance(org, str):
         raise ConfigError(f"org must be a string, got {org!r}")
 
+    line_length = data.get("line_length", DEFAULT_LINE_LENGTH)
+    if isinstance(line_length, bool) or not isinstance(line_length, int):
+        raise ConfigError(f"line_length must be an integer, got {line_length!r}")
+    if line_length < 1:
+        raise ConfigError(f"line_length must be positive, got {line_length}")
+
     raw_objects = data.get("objects", {})
     if not isinstance(raw_objects, dict):
         # ConfigError, not TypeError: the user handed us a malformed document,
@@ -88,7 +98,7 @@ def parse_config(data: dict[str, Any], path: Path | None = None) -> Config:
         raise ConfigError(f"[objects] must be a table, got {raw_objects!r}")
 
     objects = {name: _parse_scope(name, raw) for name, raw in raw_objects.items()}
-    return Config(org=org, objects=objects, path=path)
+    return Config(org=org, objects=objects, path=path, line_length=line_length)
 
 
 def load_config(path: str | Path) -> Config:

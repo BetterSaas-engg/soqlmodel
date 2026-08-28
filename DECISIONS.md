@@ -696,3 +696,58 @@ and nobody can legally use the package. That is not a default to apply
 quietly on the owner's behalf, so it is recorded rather than chosen. The
 README says so plainly instead of implying a permissive license that has
 not been granted.
+
+## D18 — generated output is stable under a formatter, via the magic trailing comma (2026-08-27)
+
+**Context:** D17 blocked the release on `generate` emitting lines past
+the line length. The obvious reading — "make the lines short" — is
+wrong, and the ticket said so: the requirement is that generated output
+**survives `ruff format` unchanged**, because `models.py` gets committed
+by the user and reformatted by their toolchain.
+
+Short lines are not sufficient, because a formatter also *joins*. A
+call wrapped across lines that would fit on one gets collapsed. So
+"always wrap" fails exactly as badly as "never wrap", in the opposite
+direction, and both produce the same phantom diff on every `generate`.
+
+**Decision:** Two forms, chosen per field against a configurable
+`line_length`.
+
+Under the limit, one line. Over it, wrapped with a **magic trailing
+comma**:
+
+    Commission_Attainment_Rolling_12M__c: Field[str] = Field(
+        "Commission_Attainment_Rolling_12M__c",
+        "picklist",
+    )
+
+The trailing comma is the mechanism, not styling. Ruff and Black both
+read it as "the author wants this exploded" and leave the call alone at
+*any* line length. Measured at 79, 88, 100, 120 and 200: the wrapped
+form never moves; the same call without the comma is collapsed at every
+one of them. Both directions are asserted in
+`tests/test_generated_format_stability.py` so the claim rests on the
+formatter's observed behaviour rather than on ours.
+
+**`line_length` is configurable, defaulting to 88.** This is the part
+that makes the guarantee real rather than nearly-real. The wrapped form
+is stable everywhere, but the one-line form is only stable for a
+formatter configured at or above the value we generated for. A fixed
+constant would therefore leave some users churning no matter which
+constant was picked — measured across three real objects (592 fields),
+a threshold of 88 leaves 106 lines that a formatter set to 79 would
+rewrite. Matching the user's setting removes the gap entirely. 88 is
+ruff's and Black's default, so most projects set nothing.
+
+**Consequence:** verbosity scales with how narrow the formatter is. On
+the same 592 real fields: 621 lines at 120, 663 at 100, 843 at 88, 1161
+at 79. That is the price of stability and it is worth paying — a
+generated file is read rarely and regenerated constantly.
+
+The wrapped form deliberately puts each argument on its own line rather
+than packing them, because packed arguments plus a trailing comma is not
+a form ruff produces, and generating something the formatter would
+rewrite is the entire bug.
+
+Determinism (D5) is unaffected and still tested: same snapshot and same
+`line_length` produce byte-identical text.

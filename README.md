@@ -157,6 +157,15 @@ Plain classes with explicit annotated attributes. No metaclasses, no
 `__getattr__`, nothing dynamic — if mypy and Pylance cannot see every field
 statically, the product does not work. Commit this too, or regenerate it in CI.
 
+The output is **stable under `ruff format` and Black**: long field names wrap
+with a trailing comma, which formatters leave alone, so regenerating never
+fights your formatter. The default assumes a line length of 88 — ruff's and
+Black's default. If yours differs, say so and the output matches it:
+
+```toml
+line_length = 120
+```
+
 ### 4. Build queries
 
 ```python
@@ -363,10 +372,6 @@ Stated plainly rather than discovered later.
   transport, which exercises their real signatures, URL building and response
   parsing without an org. What remains unproven is those two methods talking to
   Salesforce over the wire.
-- **Generated output is not `ruff format`-clean.** A field name over roughly 30
-  characters produces a line past 100 characters, so a repository that runs a
-  formatter will reformat `models.py` and the next `generate` will write it
-  back flat. Fix pending; see `KNOWN_ISSUES.md`.
 - **Compound field types** (address, location) fall back to `Any`.
 - **No relationship traversal.** Single-object queries only; no parent/child
   joins.
@@ -389,6 +394,4 @@ proposing a change that touches a prior decision.
 
 ## License
 
-**Not yet chosen.** Until a license is added, default copyright applies and
-this is not usable in your project — see `KNOWN_ISSUES.md`. Resolving it is a
-prerequisite for publishing to PyPI, not an afterthought.
+MIT. Copyright (c) 2026 OptimaCore. See [LICENSE](LICENSE).

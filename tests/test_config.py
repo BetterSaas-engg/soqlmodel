@@ -177,3 +177,47 @@ def test_config_is_immutable():
 
     with pytest.raises(AttributeError):
         config.org = "Sandbox"  # type: ignore[misc]
+
+
+# --- line_length (D18) ------------------------------------------------------
+
+
+def test_line_length_defaults_to_the_formatter_default():
+    assert parse_config({}).line_length == 88
+
+
+def test_line_length_is_read_from_the_config():
+    assert parse_config({"line_length": 120}).line_length == 120
+
+
+def test_line_length_must_be_an_integer():
+    with pytest.raises(ConfigError, match="line_length must be an integer"):
+        parse_config({"line_length": "88"})
+
+
+def test_line_length_rejects_a_bool():
+    # True is an int in Python; it is not a line length.
+    with pytest.raises(ConfigError, match="line_length must be an integer"):
+        parse_config({"line_length": True})
+
+
+def test_line_length_must_be_positive():
+    with pytest.raises(ConfigError, match="line_length must be positive"):
+        parse_config({"line_length": 0})
+
+
+def test_line_length_reaches_the_generated_module(tmp_path):
+    """The config key is only worth having if it changes the output."""
+    from soqlmodel.generate import generate_combined_module
+
+    snapshot = {
+        "format_version": 1,
+        "org": "o",
+        "sobject": "Account",
+        "fields": [{"name": "Commission_Attainment_Rolling_12M__c", "type": "string"}],
+    }
+    narrow = generate_combined_module([snapshot], parse_config({"line_length": 79}).line_length)
+    wide = generate_combined_module([snapshot], parse_config({"line_length": 200}).line_length)
+
+    assert "Field(\n" in narrow
+    assert "Field(\n" not in wide

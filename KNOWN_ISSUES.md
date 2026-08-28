@@ -1,36 +1,33 @@
 # Known issues
 
-## RELEASE BLOCKERS — v0.1.0 is not published (2026-08-27)
+## RELEASE STATUS — both D17 blockers cleared (2026-08-27)
 
-Two, both recorded in D17. Neither is a code bug in the usual sense and
-both stop the PyPI release.
+1. **License: resolved.** MIT, `Copyright (c) 2026 OptimaCore`. `LICENSE`
+   at the repo root, `license = "MIT"` and `license-files = ["LICENSE"]`
+   in `pyproject.toml` (PEP 639, so no legacy `License ::` classifier —
+   setting both is an error on modern backends). Verified in the built
+   artifact, not just the repo: the wheel's METADATA carries
+   `License-Expression: MIT` and `License-File: LICENSE`, and the file
+   ships at `soqlmodel-0.1.0.dist-info/licenses/LICENSE`.
 
-1. **No license.** No `LICENSE` file, no `license` key in
-   `pyproject.toml`. Default copyright applies, so the package is
-   all-rights-reserved and legally unusable by anyone. Not chosen here:
-   picking a license is the owner's call, not a default to apply
-   quietly. The README states this plainly rather than implying a
-   permissive license that was never granted.
+2. **Generated output stability: resolved** by D18. Long fields now wrap
+   with a magic trailing comma, which no formatter collapses.
+   Re-measured against the same three real objects (592 fields):
+   `ruff format` leaves the output unchanged at 79, 88, 100 and 120, and
+   no line exceeds the configured length at any of them. `line_length`
+   is configurable in `soqlmodel.toml`, default 88.
 
-2. **Generated output is not `ruff format`-clean** — the entry below,
-   promoted to a blocker by D17. Measured across three real unscoped
-   objects: 18 of 592 field lines over 100 characters. 3% of lines, but
-   **100% of the modules**, because one long line dirties the whole
-   file. A generator that produces a spurious diff on every run in any
-   repo with a formatter contradicts this project's central pitch.
+**Remaining before PyPI:** CI must go green on its first real run.
 
-Release sequence: SFM-10c, then a license, then TestPyPI, then PyPI.
-
-Also worth knowing: **no PyPI credentials exist on this machine.** No
-`TWINE_*`, `UV_PUBLISH_TOKEN` or `PYPI_TOKEN` env vars, no `~/.pypirc`,
-no keyring. Any upload needs a token supplied first.
+**No PyPI credentials exist on this machine.** No `TWINE_*`,
+`UV_PUBLISH_TOKEN` or `PYPI_TOKEN` env vars, no `~/.pypirc`, no keyring.
+Any upload — TestPyPI included — needs a token supplied first.
 
 **The name `soqlmodel` is free on PyPI** — `GET
-https://pypi.org/pypi/soqlmodel/json` returns 404. Note that a TestPyPI
-upload would *not* confirm this: they are separate registries with
-separate namespaces, so claiming the name on TestPyPI says nothing about
-production PyPI. The 404 is the actual evidence, and it is only true
-until someone else takes it.
+https://pypi.org/pypi/soqlmodel/json` returns 404, re-checked
+2026-08-27. A TestPyPI upload would *not* confirm this: separate
+registries, separate namespaces. The 404 is the evidence, and it holds
+only until someone else takes the name.
 
 ## The simple-salesforce leg has never run against a live org (2026-08-27)
 
@@ -107,31 +104,28 @@ Resolving it means obtaining a session another way (a fresh `sf org
 login`, or username/password/token credentials). Not attempted here:
 that is credential material and it was not needed to prove the paging.
 
-## Generated output is not `ruff format`-clean (2026-08-27)
+## RESOLVED — generated output was not `ruff format`-clean (2026-08-27)
 
-D14 enforces `ruff format` on this repo, and the rule it implies is that
-`generate` must emit source that is already formatted — otherwise a user
-whose repo runs a formatter gets a diff on every `soqlmodel generate`
-with no schema change behind it. Exactly the phantom-diff failure the
-project exists to prevent, one layer out from D13's BOM.
+Fixed the same day by D18; kept because the measurements are the
+argument for the design and because the failure mode is worth
+recognising if the emitter is ever changed.
 
-The generator does not wrap. A field name over roughly 30 characters
-pushes its line past `line-length = 100`:
+The generator did not wrap. A field name over 32 characters pushed its
+line past 100:
 
     Commission_Attainment_Rolling_12M__c: Field[str] = Field("Commission_Attainment_Rolling_12M__c", "picklist")
 
-110 characters, from a real object in a real org. `HiBob_Variable_Pay_Synced_At__c`
-lands on exactly 100, so the boundary is not theoretical either. Long
-API names are the norm in Salesforce, not the exception — assume most
-real orgs hit this.
+110 characters, from a real object. Across Account, Contact and
+Opportunity unscoped — 592 fields — 18 lines exceeded 100. 3% of lines
+but 100% of modules, since one long line dirties the file.
 
-It passes `ruff check` today only because `line-length` alone does not
-enable E501. That is not reassurance; it is why nobody noticed.
+It passed `ruff check` only because `line-length` alone does not enable
+E501. That was why nobody noticed, not a reason it was fine.
 
-Not fixed here: the generator has to learn to wrap, `write_combined_module`
-needs a formatting-stability test against long names, and both are their
-own ticket rather than something to slip into a review commit. Estimated
-small — the emitter is one f-string.
+The fix is not "shorter lines" — see D18. A formatter joins as well as
+splits, so the requirement is stability in both directions, and that is
+what `tests/test_generated_format_stability.py` asserts against a real
+`ruff format` at four line lengths.
 
 ## CORRECTION — Application Control blocks some console scripts, not all (2026-08-27)
 

@@ -156,7 +156,7 @@ def generate_all(
     destination = Path(out_path)
     _ensure_dir(destination.parent)
 
-    return write_combined_module(snapshots, destination)
+    return write_combined_module(snapshots, destination, config.line_length)
 
 
 def check_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> list[Change]:
