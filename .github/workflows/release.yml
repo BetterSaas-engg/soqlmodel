@@ -1,0 +1,138 @@
+name: Release
+
+# Trusted Publishing (OIDC). No API token is stored anywhere: the job mints a
+# short-lived identity token, PyPI verifies it came from this repository and
+# this workflow file, and issues a one-time upload token. There is no secret in
+# the repo, in an environment, or on a developer machine to leak or rotate.
+#
+# Two ways in:
+#   - push a v* tag        -> publishes to PyPI
+#   - run it by hand       -> publishes to whichever index you pick
+#
+# The manual path exists so TestPyPI is a rehearsal of *this* workflow rather
+# than of something that resembles it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Index to publish to"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+# Nothing by default. id-token is granted only on the two publish jobs, and
+# never on the job that runs the build.
+permissions: {}
+
+jobs:
+  build:
+    name: build and verify the artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: build sdist and wheel
+        run: uv build
+
+      - name: the tag matches the version in pyproject
+        # Only meaningful on a tag push. Publishing 0.1.0 from a tag that says
+        # v0.2.0 is unfixable after the fact — a version number on PyPI can
+        # never be reused, even after deletion.
+        if: github.event_name == 'push'
+        run: |
+          uv run --isolated python - <<'PY'
+          import glob, os, sys, tomllib
+          with open("pyproject.toml", "rb") as fh:
+              version = tomllib.load(fh)["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if tag != version:
+              sys.exit(f"tag {tag!r} does not match pyproject version {version!r}")
+          built = sorted(glob.glob("dist/*"))
+          if not any(version in name for name in built):
+              sys.exit(f"no artifact carries version {version}: {built}")
+          print(f"tag and version agree on {version}")
+          PY
+
+      - name: the artifacts are well formed
+        # twine's own metadata check, plus the two things CI already guards on
+        # every push. Cheaper to catch here than in an upload that half-fails.
+        run: |
+          uv run --isolated --with twine twine check dist/*
+          uv run --isolated python - <<'PY'
+          import glob, sys, tarfile, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          with zipfile.ZipFile(whl) as z:
+              names, meta = z.namelist(), z.read(
+                  [n for n in z.namelist() if n.endswith("METADATA")][0]
+              ).decode()
+          problems = []
+          if "License-Expression: MIT" not in meta:
+              problems.append("wheel METADATA lacks License-Expression: MIT")
+          if not any(n.endswith("licenses/LICENSE") for n in names):
+              problems.append("wheel does not ship LICENSE")
+          if not any(n.endswith("soqlmodel/py.typed") for n in names):
+              problems.append("wheel does not ship py.typed")
+          if "Description-Content-Type:" not in meta:
+              problems.append("wheel METADATA lacks a README content type")
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          with tarfile.open(sdist) as t:
+              if not any(n.endswith("LICENSE") for n in t.getnames()):
+                  problems.append("sdist does not ship LICENSE")
+          if problems:
+              sys.exit("; ".join(problems))
+          print("wheel and sdist look publishable")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  testpypi:
+    name: publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      # The only privilege this job has. It cannot read the repo or write to it.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # A rehearsal gets re-run. Without this, a second attempt fails on
+          # files that uploaded fine the first time.
+          skip-existing: true
+
+  pypi:
+    name: publish to PyPI
+    needs: build
+    if: >-
+      github.event_name == 'push'
+      || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        # No skip-existing here on purpose: on the real index, "this file
+        # already exists" means something has gone wrong and should be loud.
