@@ -23,8 +23,8 @@ jobs:
     name: ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -43,8 +43,8 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --frozen --python ${{ matrix.python }}
@@ -87,8 +87,8 @@ jobs:
         # be checked on the ARM64 Windows dev machine (no cryptography wheel).
         python: ["3.11", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --frozen --python ${{ matrix.python }} --extra salesforce
@@ -113,8 +113,8 @@ jobs:
     name: works without the extra
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync --frozen
@@ -146,8 +146,8 @@ jobs:
     name: build and install the wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
 
@@ -166,7 +166,32 @@ jobs:
           test -f /tmp/clean/lib/python*/site-packages/soqlmodel/py.typed \
             && echo "py.typed shipped" || (echo "py.typed MISSING" && exit 1)
 
-      - uses: actions/upload-artifact@v4
+      - name: the wheel carries the license
+        # In the artifact, not just the repo. A LICENSE file that never
+        # reaches the wheel leaves the package effectively unlicensed for
+        # anyone who installs it.
+        run: |
+          uv run --isolated python - <<'PY'
+          import glob, sys, zipfile
+          with zipfile.ZipFile(glob.glob("dist/*.whl")[0]) as z:
+              meta = z.read("soqlmodel-0.1.0.dist-info/METADATA").decode()
+              names = z.namelist()
+          if "License-Expression: MIT" not in meta:
+              sys.exit("wheel METADATA is missing License-Expression: MIT")
+          if not any(n.endswith("licenses/LICENSE") for n in names):
+              sys.exit("wheel does not ship the LICENSE file")
+          print("license present in wheel metadata and payload")
+          PY
+
+      - name: the sdist is installable too
+        # `uv build` builds the wheel *from* the sdist, but nothing so far
+        # installs the sdist itself.
+        run: |
+          python -m venv /tmp/sdist
+          /tmp/sdist/bin/pip install --quiet dist/*.tar.gz
+          /tmp/sdist/bin/soqlmodel --version
+
+      - uses: actions/upload-artifact@v5
         with:
           name: dist
           path: dist/
