@@ -46,5 +46,40 @@ uv run ruff check .
 
 ## Current state
 
-Skeleton only — `src/soqlmodel/__init__.py` and a smoke test. The stages above
-are the target design, not yet implemented.
+v1 scope is complete: SFM-1 through SFM-11. The four stages above are
+implemented, plus drift detection and execution.
+
+| Module | What it does |
+|---|---|
+| `extract.py` | Stage 1. Shells out to `sf`; the only module that touches the org. Also owns `write_snapshot` / `read_snapshot` — the format rules live together. |
+| `describe.py` | Stage 2. Trims a describe payload into a deterministic snapshot. |
+| `generate.py` | Stage 3. Snapshot → Python source. Pure. |
+| `fields.py` / `query.py` | Stage 4. `Field`, `Condition`, and the SOQL builder. Pure, no network. |
+| `check.py` | Diffs a committed snapshot against the org. CRITICAL/WARNING (D10). |
+| `execute.py` | Hands rendered SOQL to a caller-supplied client and drains the cursor (D15). |
+| `project.py` | Orchestration over the stages. Owns no classification logic. |
+| `config.py` | `soqlmodel.toml` — the declared dependency (D9). |
+| `errors.py` | `SoqlModelError` and one subclass per stage (D11). |
+| `cli.py` | `snapshot`, `generate`, `check`. Thin. |
+
+386 tests. CI runs ruff, `mypy --strict`, and the suite across Python
+3.11–3.14 on Linux.
+
+**Not done, and deliberately so:** generated output is not `ruff format`-clean
+(long field names overflow 100 chars); the simple-salesforce execution path has
+never run against a live org; no license is chosen yet. All three are in
+`KNOWN_ISSUES.md`, and the last two block a PyPI release.
+
+## Errors
+
+Two hierarchies, and the distinction is load-bearing (D11).
+
+`SoqlModelError` and its subclasses are **user failures** — bad config,
+unreachable org, a declared field the org lacks. The CLI catches these and
+prints one line, exit 2.
+
+Plain `ValueError` / `TypeError` are **programming failures** — a caller
+misusing the library. The CLI does not catch them, so they surface as
+tracebacks. Nothing in `errors.py` subclasses `ValueError`; that is what stops
+`except SoqlModelError` from swallowing a bug. When adding a raise site, decide
+which kind it is before picking a class.

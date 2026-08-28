@@ -9,6 +9,25 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+# No `license` key yet — deliberately, and it blocks the PyPI release. Picking
+# one is the owner's call, not a default to be quietly applied; without it the
+# package is all-rights-reserved and nobody can use it. See KNOWN_ISSUES.md.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/BetterSaas-engg/soqlmodel"
+Issues = "https://github.com/BetterSaas-engg/soqlmodel/issues"
+
 # Optional, never imported (D1/D15). soqlmodel types the client structurally,
 # so snapshot, generate and check all work with this absent; it is needed only
 # to construct the client that soqlmodel.execute is handed.

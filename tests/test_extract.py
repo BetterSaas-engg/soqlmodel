@@ -169,6 +169,35 @@ def test_read_snapshot_reports_bad_json_with_the_filename(tmp_path):
         read_snapshot(path)
 
 
+def test_read_snapshot_rejects_json_that_is_not_an_object(tmp_path):
+    """Found by mypy --strict, not by a failing test.
+
+    json.loads returns Any, so a file holding a list satisfied this function's
+    dict[str, Any] annotation and failed much later as a TypeError from
+    ``committed["sobject"]`` — a confusing error far from the real problem.
+    """
+    path = tmp_path / "Account.json"
+    path.write_text('["not", "a", "snapshot"]', encoding="utf-8")
+
+    with pytest.raises(SnapshotError, match="holds a JSON list, not an object"):
+        read_snapshot(path)
+
+
+def test_read_snapshot_rejects_a_bare_json_scalar(tmp_path):
+    path = tmp_path / "Account.json"
+    path.write_text('"just a string"', encoding="utf-8")
+
+    with pytest.raises(SnapshotError, match="not an object"):
+        read_snapshot(path)
+
+
+def test_unwrap_describe_rejects_a_non_object_result():
+    """`sf sobject list` puts an array under 'result'. Feeding the wrong
+    command's output here should say so, not fail later."""
+    with pytest.raises(SfCliError, match="not an object"):
+        unwrap_describe({"status": 0, "result": ["Account", "Contact"]})
+
+
 def test_read_snapshot_reports_bad_encoding_with_the_filename(tmp_path):
     path = tmp_path / "Account.json"
     path.write_bytes(b'{"org": "\xff\xfe"}')

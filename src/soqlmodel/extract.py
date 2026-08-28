@@ -37,7 +37,18 @@ def unwrap_describe(payload: dict[str, Any]) -> dict[str, Any]:
     if "result" not in payload:
         return payload
 
-    return payload["result"]
+    result = payload["result"]
+    if not isinstance(result, dict):
+        # Surfaced by mypy --strict, which would not accept returning the Any
+        # this indexing produces. Validating beats casting: `sf sobject list`
+        # returns a JSON array under "result", so feeding the wrong command's
+        # output here is a real mistake to catch by name rather than to let
+        # through and have fail later as a confusing TypeError.
+        raise SfCliError(
+            f"sf returned a {type(result).__name__} under 'result', not an "
+            "object; this does not look like a describe payload"
+        )
+    return result
 
 
 def fetch_describe(sobject: str, org: str) -> dict[str, Any]:
@@ -134,10 +145,22 @@ def read_snapshot(path: str | Path) -> dict[str, Any]:
         )
 
     try:
-        return json.loads(raw.decode("utf-8"))
+        loaded = json.loads(raw.decode("utf-8"))
     except UnicodeDecodeError as exc:
         raise SnapshotError(f"{path} is not valid UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
         # A hand-edited snapshot. One line naming the file beats a raw
         # JSONDecodeError, which names neither the file nor the fix.
         raise SnapshotError(f"{path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(loaded, dict):
+        # A latent bug that mypy --strict found: json.loads returns Any, so a
+        # snapshot file holding a list or a bare string sailed through this
+        # function's dict[str, Any] annotation and failed later as a TypeError
+        # from `committed["sobject"]` — a confusing error a long way from the
+        # actual problem.
+        raise SnapshotError(
+            f"{path} holds a JSON {type(loaded).__name__}, not an object; it is not a snapshot"
+        )
+
+    return loaded

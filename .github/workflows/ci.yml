@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch cancels the first: nothing here needs the
+# older run's result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Deterministic installs, and no interactive prompts anywhere.
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    # Formatting and lint do not vary by Python version, so one runner is
+    # enough (D14).
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  test:
+    # The matrix is the point: requires-python says >=3.11 and until this ran,
+    # that was a claim rather than a tested fact.
+    name: py${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --python ${{ matrix.python }}
+
+      - name: mypy --strict
+        # Load-bearing. This project's central claim is that generated models
+        # resolve statically; a Linux runner is where that gets verified,
+        # regardless of mypy working on any one developer's machine.
+        run: uv run --python ${{ matrix.python }} mypy --strict src/soqlmodel
+
+      - name: pytest
+        # Includes the five tests that shell out to mypy. They are never
+        # skipped: they verify generated code type-checks, which is the
+        # contract, and a skip-on-unavailable would hide exactly that signal.
+        run: uv run --python ${{ matrix.python }} python -m pytest -q
+
+      - name: the mypy-dependent tests actually ran
+        # Guards against them being silently deselected or skipped. `-m
+        # "not slow"` is not used anywhere here, so a zero count means
+        # something is wrong with collection, not with the filter.
+        run: |
+          uv run --python ${{ matrix.python }} python -m pytest -q \
+            tests/test_fields.py::test_mypy_passes_clean_on_the_module \
+            tests/test_generate.py::test_generated_output_passes_mypy \
+            tests/test_generate.py::test_generated_fields_are_statically_resolvable \
+            tests/test_project.py::test_the_generated_module_type_checks \
+            tests/test_query.py::test_mypy_passes_clean_on_the_module
+
+  conformance:
+    # The cheap partial from SFM-10: verify the documented client without an
+    # org and without secrets. See tests/test_salesforce_conformance.py for
+    # why isinstance alone would not be worth running.
+    name: simple-salesforce conformance
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 included deliberately: `soqlmodel[salesforce]` resolving on the
+        # oldest supported Python is itself part of the claim, and it cannot
+        # be checked on the ARM64 Windows dev machine (no cryptography wheel).
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --python ${{ matrix.python }} --extra salesforce
+
+      - name: the extra is importable
+        run: uv run --python ${{ matrix.python }} python -c "import simple_salesforce; print(simple_salesforce.__name__)"
+
+      - name: conformance tests
+        # The env var turns the module's skip into a hard failure, so this job
+        # cannot pass by quietly running nothing.
+        env:
+          SOQLMODEL_REQUIRE_SALESFORCE_EXTRA: "1"
+          # pytest exits 5 on "no tests collected", which fails the step.
+        run: |
+          uv run --python ${{ matrix.python }} python -m pytest -q \
+            tests/test_salesforce_conformance.py
+
+  optional-dependency:
+    # The other half of the claim: with the extra absent, the package must
+    # still import and run snapshot/generate/check. Nothing here touches an
+    # org, so the schema comes from a committed fixture.
+    name: works without the extra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+
+      - name: simple-salesforce is not installed
+        run: |
+          uv run python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("simple_salesforce") is not None:
+              sys.exit("simple-salesforce is installed; this job proves the absent case")
+          print("absent, as required")
+          PY
+
+      - name: importing execute does not need it
+        run: |
+          uv run python - <<'PY'
+          import sys
+          import soqlmodel.execute
+          assert "simple_salesforce" not in sys.modules
+          print("soqlmodel.execute imported without it")
+          PY
+
+      - name: the CLI runs
+        run: |
+          uv run soqlmodel --version
+          uv run soqlmodel --help
+
+  build:
+    name: build and install the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: build
+        run: uv build
+
+      - name: install the wheel into a clean venv and run the entry point
+        # Not the dev checkout: a wheel that omits py.typed or the console
+        # script passes every test above and fails for the first real user.
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install --quiet dist/*.whl
+          cd /tmp
+          /tmp/clean/bin/soqlmodel --version
+          /tmp/clean/bin/python -c "import soqlmodel.execute; print('import ok')"
+          test -f /tmp/clean/lib/python*/site-packages/soqlmodel/py.typed \
+            && echo "py.typed shipped" || (echo "py.typed MISSING" && exit 1)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

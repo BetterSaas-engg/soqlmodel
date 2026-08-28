@@ -5,6 +5,7 @@ built in this file, which is the point of the structural Protocol: the seam is
 testable without the dependency that normally sits behind it.
 """
 
+import subprocess
 import sys
 
 import pytest
@@ -319,11 +320,16 @@ def test_a_half_client_is_refused_and_the_message_names_what_is_missing():
         execute(QUERY, QueryOnly())
 
 
-def test_the_error_names_the_dependency_and_how_to_install_it():
-    """AC4. simple-salesforce is genuinely not installed in this environment,
-    so this is the real message a user would see, not a simulated one."""
-    if "simple_salesforce" in sys.modules:  # pragma: no cover
-        pytest.skip("only meaningful with simple-salesforce absent")
+def test_the_error_names_the_dependency_when_it_is_absent(monkeypatch):
+    """AC4. Both branches are forced rather than inferred from the environment.
+
+    An earlier version guarded on ``"simple_salesforce" in sys.modules`` and
+    skipped otherwise. That was wrong twice: the code branches on
+    ``find_spec``, not on what has been imported, so the guard tested a
+    different condition than the code used — and a skip meant the branch went
+    unverified in exactly the environment (extra installed) where CI runs it.
+    """
+    monkeypatch.setattr("soqlmodel.execute.find_spec", lambda name: None)
 
     with pytest.raises(ExecuteError) as exc:
         execute(QUERY, None)
@@ -332,13 +338,29 @@ def test_the_error_names_the_dependency_and_how_to_install_it():
     assert 'pip install "soqlmodel[salesforce]"' in str(exc.value)
 
 
+def test_the_error_says_pass_a_client_when_the_dependency_is_present(monkeypatch):
+    """The other branch: installed, but the caller passed the wrong object. A
+    pip command would be a red herring here."""
+    monkeypatch.setattr("soqlmodel.execute.find_spec", lambda name: object())
+
+    with pytest.raises(ExecuteError) as exc:
+        execute(QUERY, None)
+
+    assert "pass a simple_salesforce.Salesforce instance" in str(exc.value)
+    assert "not installed" not in str(exc.value)
+
+
 # --- no writes, ever ---------------------------------------------------------
 
 
 def test_the_client_contract_declares_only_reads():
     """AC6, at the contract. Anything that mutates would have to be added here
-    first, so this test is the gate."""
-    declared = set(SalesforceClient.__protocol_attrs__)
+    first, so this test is the gate.
+
+    Read off ``vars()`` rather than ``__protocol_attrs__``: that attribute
+    only exists from 3.12, and this package claims 3.11.
+    """
+    declared = {name for name in vars(SalesforceClient) if not name.startswith("_")}
 
     assert declared == {"query", "query_more"}
 
@@ -371,10 +393,28 @@ def test_no_dml_verb_appears_in_the_execute_module():
 
 
 def test_importing_execute_does_not_import_simple_salesforce():
-    """AC4. The Protocol is structural precisely so this holds."""
-    import soqlmodel.execute  # noqa: F401
+    """AC4. The Protocol is structural precisely so this holds.
 
-    assert "simple_salesforce" not in sys.modules
+    In a subprocess, not this one. The first version asserted
+    ``"simple_salesforce" not in sys.modules`` in-process, which is a claim
+    about the whole session rather than about importing our module — so it
+    failed the moment the conformance tests, which import simple-salesforce
+    legitimately, ran first. Order-dependent and testing the wrong thing. A
+    fresh interpreter is the only honest way to ask what an import pulls in.
+    """
+    probe = (
+        "import sys\n"
+        "import soqlmodel.execute\n"
+        "assert 'simple_salesforce' not in sys.modules, 'execute imported it'\n"
+        "print('clean')\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "clean" in result.stdout
 
 
 def test_the_query_is_rendered_exactly_as_query_py_renders_it():

@@ -607,3 +607,92 @@ to catch on. `ExecuteError` is raised only for our own failures: a
 client that cannot answer our calls, a malformed batch, a cursor that
 stops advancing. That split is D11 applied one module further out, and
 it is tested by a mutation that wraps client errors and must fail.
+
+## D16 — "snapshot" is kept, despite the Salesforce collision (2026-08-27)
+
+**Context:** Salesforce already uses "snapshot" for Reporting Snapshots
+(formerly Analytic Snapshots), which periodically write *report results*
+into a custom object. Our snapshot is a committed JSON file describing
+*schema*. Same word, different thing, and the audience is people who
+work in Salesforce daily. Parked since SFM-3; SFM-11 has to settle it
+because the README is where a stranger meets the term.
+
+**Decision:** Keep `snapshot`. Say **schema snapshot** where ambiguity
+is possible, and address the collision explicitly in the README rather
+than hoping nobody notices.
+
+The alternatives are worse. "Lock" (`soqlmodel.lock`) implies dependency
+resolution — a lockfile pins a solved version set, and nothing here is
+solved or resolved. "Freeze" implies pinning something that would
+otherwise drift on its own, but the org drifts whether or not we
+record it. "Schema dump" describes a mirror, which is precisely what
+D9 decided this is *not* — it is a scoped declaration of dependency.
+"Manifest" is closest in spirit but is taken twice over in this space,
+by `package.xml` manifests in SFDX and by the term's general use for
+deploy payloads.
+
+Against that, "snapshot" is broadly understood outside Salesforce — VM
+snapshots, database snapshots, snapshot testing — and all of those carry
+the right connotation: a point-in-time record you compare against later.
+The collision is with a niche reporting feature that a data engineer
+integrating a pipeline is unlikely to have in mind, and the surrounding
+context disambiguates immediately: the files live in `schema/`, the
+config is `soqlmodel.toml`, and the command sits beside `generate` and
+`check`.
+
+**Consequence:** a rename would have been cheap now and expensive later
+— the CLI verb, the directory, `snapshot_all`, `MissingSnapshotError`,
+`SNAPSHOT_FORMAT_VERSION` and the docs all carry it. Deciding to keep it
+is therefore a real decision with a real cost if wrong, which is why it
+is written down rather than left implicit. If user confusion shows up in
+practice, the migration is a CLI alias plus a directory default, not a
+rewrite.
+
+## D17 — the generated-output wrap defect blocks the v1 release (2026-08-27)
+
+**Context:** SFM-11 had to decide whether SFM-10c — `generate` emitting
+lines past `line-length = 100` — blocks publishing to PyPI or ships as a
+documented limitation.
+
+**Measured before deciding**, against three real objects (Account,
+Contact, Opportunity, all unscoped) from a live org:
+
+- 592 generated field lines, **18 over 100 characters** (3.0%), longest
+  132.
+- Overflow begins at an API name length of **32 characters**.
+
+3% sounds ignorable. It is not, because the unit that matters is not the
+line, it is the **file**: one overflowing line makes the whole module
+non-`ruff format`-clean. All three objects tested produce a dirty
+module. In a repository that runs a formatter, this fires on essentially
+every real generate, not on 3% of them.
+
+**Decision:** It blocks the release. Fix SFM-10c first.
+
+The reasoning is not severity, it is *subject matter*. This project's
+pitch is that a schema change surfaces as a failing build instead of
+wrong numbers, and the supporting property — the one D5, D13 and D14 all
+exist to protect — is that regenerating produces no diff unless the org
+moved. A generator whose output a formatter rewrites, and which then
+rewrites back on the next run, produces a phantom diff on every run.
+That is the exact failure this tool claims to eliminate, shipped inside
+the tool, on the first artifact a new user sees.
+
+Shipping it with a README note would be defensible for most projects.
+Not for this one: "regenerate produces a spurious diff" is the single
+worst first impression this particular package could make, and it would
+undercut the pitch in the same session a user first tries it.
+
+The fix is small — the emitter is one f-string — which makes shipping
+around it harder to justify, not easier.
+
+**Consequence:** v0.1.0 is not published. The release sequence is
+SFM-10c, then a license, then TestPyPI, then PyPI.
+
+**A second, independent blocker surfaced while writing the README: there
+is no license.** No `LICENSE` file and no `license` key in
+`pyproject.toml`, which means default copyright — all rights reserved —
+and nobody can legally use the package. That is not a default to apply
+quietly on the owner's behalf, so it is recorded rather than chosen. The
+README says so plainly instead of implying a permissive license that has
+not been granted.

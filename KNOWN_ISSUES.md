@@ -1,5 +1,37 @@
 # Known issues
 
+## RELEASE BLOCKERS — v0.1.0 is not published (2026-08-27)
+
+Two, both recorded in D17. Neither is a code bug in the usual sense and
+both stop the PyPI release.
+
+1. **No license.** No `LICENSE` file, no `license` key in
+   `pyproject.toml`. Default copyright applies, so the package is
+   all-rights-reserved and legally unusable by anyone. Not chosen here:
+   picking a license is the owner's call, not a default to apply
+   quietly. The README states this plainly rather than implying a
+   permissive license that was never granted.
+
+2. **Generated output is not `ruff format`-clean** — the entry below,
+   promoted to a blocker by D17. Measured across three real unscoped
+   objects: 18 of 592 field lines over 100 characters. 3% of lines, but
+   **100% of the modules**, because one long line dirties the whole
+   file. A generator that produces a spurious diff on every run in any
+   repo with a formatter contradicts this project's central pitch.
+
+Release sequence: SFM-10c, then a license, then TestPyPI, then PyPI.
+
+Also worth knowing: **no PyPI credentials exist on this machine.** No
+`TWINE_*`, `UV_PUBLISH_TOKEN` or `PYPI_TOKEN` env vars, no `~/.pypirc`,
+no keyring. Any upload needs a token supplied first.
+
+**The name `soqlmodel` is free on PyPI** — `GET
+https://pypi.org/pypi/soqlmodel/json` returns 404. Note that a TestPyPI
+upload would *not* confirm this: they are separate registries with
+separate namespaces, so claiming the name on TestPyPI says nothing about
+production PyPI. The 404 is the actual evidence, and it is only true
+until someone else takes it.
+
 ## The simple-salesforce leg has never run against a live org (2026-08-27)
 
 **The single largest untested claim in v1.** D1 names simple-salesforce
@@ -27,9 +59,28 @@ itself answering our two calls over the wire*. The transcribed
 signatures are a copy, and a copy can go stale — if upstream renames a
 parameter, that test keeps passing while real usage breaks.
 
-Blocked on org auth, not on effort — see the next entry. Carried into
-SFM-11: either CI closes it, or the README says plainly that the
-documented client is unexercised.
+Blocked on org auth, not on effort — see the next entry.
+
+**Narrowed substantially in SFM-11**, though not closed.
+`tests/test_salesforce_conformance.py` now stubs `_call_salesforce` — the
+one method that performs I/O — and lets the genuine
+`Salesforce.query` and `Salesforce.query_more` run our drain. That
+exercises their real parameter names, the `identifier_is_url` URL
+branch, and response parsing, with no org and no secrets. CI runs it on
+3.11 and 3.14 with `SOQLMODEL_REQUIRE_SALESFORCE_EXTRA=1`, which turns
+the module's skip into a hard failure so the job cannot pass by running
+nothing.
+
+Why that shape and not the `isinstance` check originally planned:
+**`issubclass` does not catch a renamed parameter.** A class declaring
+`query(self, soql_text)` and `query_more(self, locator, as_url=False)`
+passes `issubclass` against our runtime_checkable Protocol and would
+break every call we make — verified in
+`test_issubclass_alone_does_not_catch_renamed_parameters`. A conformance
+check built on `isinstance` alone would have been theatre.
+
+What is still unproven: those two methods against real Salesforce HTTP.
+The README discloses it.
 
 ## `sf org display` does not yield a usable session for a third-party client (2026-08-27)
 
@@ -164,48 +215,42 @@ The affected tests:
 `pytest.exe` is blocked by the same policy; run the suite with
 `uv run python -m pytest`.
 
-## Carry into SFM-11 (README, CI, PyPI release)
+## SFM-11 outcome, and what is left
 
-Not defects — decisions and staleness already identified, parked here so
-SFM-11 does not have to rediscover them.
+The SFM-11 carry list is resolved. Recorded here so the next reader sees
+the disposition rather than the original to-do.
 
-- **Decide how the untested simple-salesforce leg is handled** — the
-  first entry in this file, and the largest untested claim in v1.
-  SFM-11 must land on one of these and say which:
+**Done in SFM-11:**
 
-  1. **CI closes it.** Needs org credentials as repository secrets and
-     a live sandbox reachable from a runner. That makes CI depend on an
-     org staying alive and a secret staying valid — a flaky-CI risk
-     traded for a real guarantee, and it cannot run on a fork's PR.
-  2. **A nightly or manual job closes it**, separate from PR CI, so a
-     dead sandbox does not redden every pull request.
-  3. **The README says so plainly.** No secrets, no flake, and the
-     limitation is disclosed rather than hidden. Weakest guarantee.
+- CI added (`.github/workflows/ci.yml`): ruff check + `ruff format
+  --check` (D14); `mypy --strict src/soqlmodel` and the full suite across
+  Python 3.11-3.14 on Linux; an explicit step re-running the five
+  mypy-dependent tests by name so they cannot be silently skipped;
+  simple-salesforce conformance with the extra installed; a job proving
+  the package works with the extra *absent*; and a wheel build installed
+  into a clean venv with a `py.typed` check.
+- The 3.11-3.14 range is now tested, not merely claimed. It found two
+  real breaks, both fixed: `__protocol_attrs__` does not exist before
+  3.12, and a test guarded on `sys.modules` while the code branched on
+  `find_spec`, so it failed whenever the extra was installed.
+- README written. CLAUDE.md updated. Naming settled (D16). Release call
+  made (D17).
+- The simple-salesforce gap was narrowed by transport-stubbing rather
+  than the planned `isinstance` check, which would not have caught what
+  it was meant to catch. See that entry above.
 
-  A cheap partial that is worth doing regardless of the choice: a CI
-  job that installs `soqlmodel[salesforce]` and asserts
-  `isinstance(Salesforce(...), SalesforceClient)` against the **real**
-  imported class rather than our transcribed stand-in. No org needed,
-  and it catches the specific way the offline test can rot — an
-  upstream signature change that leaves the copy passing.
-
-- **CLAUDE.md's "Current state" is stale.** It still reads "Skeleton
-  only — `src/soqlmodel/__init__.py` and a smoke test." SFM-1..10 are
-  done. Update it alongside the README, in the same pass.
-
-- **CI must verify mypy on Linux regardless of it working locally
-  again.** The RESOLVED entry above records the local block clearing on
-  2026-08-26. That is one machine's toolchain and is not evidence about
-  anyone else's; the type-checking claim is this project's central
-  contract and CI is where it gets verified for real.
-
-- **CI runs `ruff format --check` beside `ruff check`** (D14).
-
-- **Generated output is not format-clean** — see the first entry in this
-  file. Decide whether it blocks the PyPI release or ships as a known
-  limitation.
+**Left over:**
 
 - **`generate.py` has a dangling "see the backlog" reference** in the
   comment above `FALLBACK_TYPE`, about compound types (address,
   location) falling back to `Any`. There is no backlog file. Either
   write one or make the comment self-contained.
+- **CI has never actually run.** Everything in the workflow was
+  validated as far as it can be locally — YAML parses, `uv sync --frozen
+  --python 3.11` works, every command was executed by hand — but no
+  GitHub Actions run has happened. The first push will be the first real
+  execution, and `soqlmodel[salesforce]` resolving on 3.11 is
+  specifically unverified anywhere, because this ARM64 Windows machine
+  has no `cryptography` wheel for cp311 and falls back to a Rust build
+  that fails.
+- **The release blockers at the top of this file.**
