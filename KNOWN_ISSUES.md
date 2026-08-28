@@ -17,7 +17,14 @@
    no line exceeds the configured length at any of them. `line_length`
    is configurable in `soqlmodel.toml`, default 88.
 
-**Remaining before PyPI:** CI must go green on its first real run.
+**CI: green.** First real run 2026-08-28, all nine jobs passing on
+Linux, zero warnings. It answered the one question nothing local
+could: `soqlmodel[salesforce]` **does** resolve on Python 3.11 — the
+ARM64 Windows `cryptography` failure was platform-specific, as
+suspected. It also verified `mypy --strict` on 3.11-3.14 and that the
+wheel carries `License-Expression: MIT`.
+
+**Remaining before PyPI: credentials.** Nothing else.
 
 **No PyPI credentials exist on this machine.** No `TWINE_*`,
 `UV_PUBLISH_TOKEN` or `PYPI_TOKEN` env vars, no `~/.pypirc`, no keyring.
@@ -239,12 +246,12 @@ the disposition rather than the original to-do.
   comment above `FALLBACK_TYPE`, about compound types (address,
   location) falling back to `Any`. There is no backlog file. Either
   write one or make the comment self-contained.
-- **CI has never actually run.** Everything in the workflow was
-  validated as far as it can be locally — YAML parses, `uv sync --frozen
-  --python 3.11` works, every command was executed by hand — but no
-  GitHub Actions run has happened. The first push will be the first real
-  execution, and `soqlmodel[salesforce]` resolving on 3.11 is
-  specifically unverified anywhere, because this ARM64 Windows machine
-  has no `cryptography` wheel for cp311 and falls back to a Rust build
-  that fails.
+- **CI has run and is green** (2026-08-28). Three findings on the way,
+  all fixed: `actions/checkout@v4` and `setup-uv@v5` were on the
+  deprecated Node 20; bumping them to "the latest release" broke every
+  job because `setup-uv` publishes releases past v10 but no floating
+  major tag beyond **v7**, so `@v10` did not resolve; and the license
+  claim was only ever checked by hand, so the build job now asserts it
+  in the wheel. Pin actions by floating major tag verified with `git
+  ls-remote`, not by the version the releases API reports.
 - **The release blockers at the top of this file.**
