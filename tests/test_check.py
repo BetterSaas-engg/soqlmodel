@@ -322,14 +322,14 @@ def test_check_reads_the_snapshot_and_diffs_what_extract_returns(tmp_path, monke
 
     captured = {}
 
-    def fake_fetch(sobject, org):
+    def fake_fetch(sobject, *, org, source, api_version):
         captured["sobject"] = sobject
         captured["org"] = org
         return {"name": "Account", "fields": [field("Name")]}
 
-    monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.check.extract_describe", fake_fetch)
 
-    changes = check(Config(org="FULL Sandbox"), path)
+    changes = check(Config(org="FULL Sandbox", api_version="68.0"), path)
 
     assert captured == {"sobject": "Account", "org": "FULL Sandbox"}
     assert [c.field for c in changes] == ["Gone__c"]
@@ -343,11 +343,13 @@ def test_check_does_not_raise_when_a_declared_field_vanished(tmp_path, monkeypat
     path.write_text(json.dumps(committed), encoding="utf-8")
 
     monkeypatch.setattr(
-        "soqlmodel.check.fetch_describe",
-        lambda sobject, org: {"name": "Account", "fields": [field("Name")]},
+        "soqlmodel.check.extract_describe",
+        lambda sobject, *, org, source, api_version: {"name": "Account", "fields": [field("Name")]},
     )
 
-    config = Config(org="Prod", objects={"Account": frozenset({"Name", "Contract_End__c"})})
+    config = Config(
+        org="Prod", api_version="68.0", objects={"Account": frozenset({"Name", "Contract_End__c"})}
+    )
     changes = check(config, path)
 
     assert [c.field for c in changes] == ["Contract_End__c"]
@@ -361,11 +363,11 @@ def test_check_falls_back_to_the_snapshots_org(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_fetch(sobject, org):
+    def fake_fetch(sobject, *, org, source, api_version):
         captured["org"] = org
         return {"name": "Account", "fields": [field("Name")]}
 
-    monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
-    check(Config(), path)
+    monkeypatch.setattr("soqlmodel.check.extract_describe", fake_fetch)
+    check(Config(api_version="68.0"), path)
 
     assert captured["org"] == "qa-sandbox"

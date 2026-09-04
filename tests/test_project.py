@@ -5,6 +5,7 @@ import pytest
 from soqlmodel.check import Severity, exit_code, has_critical
 from soqlmodel.config import Config
 from soqlmodel.errors import ConfigError, SnapshotError
+from soqlmodel.extract import write_snapshot
 from soqlmodel.project import (
     MissingSnapshotError,
     check_all,
@@ -17,6 +18,7 @@ from soqlmodel.project import (
 )
 
 ORG = "FULL Sandbox"
+API_VERSION = "68.0"
 
 
 def describe(sobject, *fields):
@@ -63,18 +65,22 @@ ORG_SCHEMA = {
 def org(monkeypatch):
     """A fake org, patched into both the extract and check call sites."""
 
-    def fake_fetch(sobject, org_alias):
+    def fake_fetch(sobject, *, org, source, api_version):
         if sobject not in ORG_SCHEMA:
             raise KeyError(sobject)
         return ORG_SCHEMA[sobject]
 
-    monkeypatch.setattr("soqlmodel.project.fetch_describe", fake_fetch)
-    monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.check.extract_describe", fake_fetch)
     return ORG_SCHEMA
 
 
 def config(**objects):
-    return Config(org=ORG, objects=objects or {"Account": None, "Opportunity": None})
+    return Config(
+        org=ORG,
+        api_version=API_VERSION,
+        objects=objects or {"Account": None, "Opportunity": None},
+    )
 
 
 # --- snapshot_all -----------------------------------------------------------
@@ -123,12 +129,12 @@ def test_snapshot_all_is_deterministic(org, tmp_path):
 
 def test_snapshot_all_needs_an_org(org, tmp_path):
     with pytest.raises(ConfigError, match="no org configured"):
-        snapshot_all(Config(objects={"Account": None}), tmp_path)
+        snapshot_all(Config(api_version=API_VERSION, objects={"Account": None}), tmp_path)
 
 
 def test_snapshot_all_needs_objects(org, tmp_path):
     with pytest.raises(ConfigError, match="no sObjects configured"):
-        snapshot_all(Config(org=ORG), tmp_path)
+        snapshot_all(Config(org=ORG, api_version=API_VERSION), tmp_path)
 
 
 # --- generate_all -----------------------------------------------------------
@@ -400,7 +406,9 @@ def test_check_all_does_not_crash_on_a_deleted_declared_field(org, tmp_path):
     snapshot["requested_fields"] = ["Deleted__c", "Name"]
     path.write_text(json.dumps(snapshot), encoding="utf-8")
 
-    scoped = Config(org=ORG, objects={"Account": frozenset({"Name", "Deleted__c"})})
+    scoped = Config(
+        org=ORG, api_version=API_VERSION, objects={"Account": frozenset({"Name", "Deleted__c"})}
+    )
     changes = check_all(scoped, tmp_path)
 
     assert [c.field for c in changes] == ["Deleted__c"]
@@ -421,3 +429,57 @@ def test_snapshot_generate_check_round_trip(org, tmp_path):
     assert "class Account:" in source and "class Opportunity:" in source
     assert changes == []
     assert exit_code(changes) == 0
+
+
+# --- api_version is required before the org is contacted (SFM-13c) -----------
+
+
+def test_snapshot_all_without_an_api_version_fails_before_any_extraction(tmp_path, monkeypatch):
+    """The ordering is the point: no network call, not even one, when the
+    config is missing the pin."""
+    calls = []
+    monkeypatch.setattr(
+        "soqlmodel.project.extract_describe",
+        lambda *a, **k: calls.append(a) or {"name": "Account", "fields": []},
+    )
+
+    with pytest.raises(ConfigError, match="no api_version configured"):
+        snapshot_all(Config(org=ORG, objects={"Account": None}), tmp_path)
+
+    assert calls == [], "the org was contacted despite an unusable config"
+
+
+def test_check_without_an_api_version_fails_before_any_extraction(tmp_path, monkeypatch):
+    committed = {
+        "format_version": 1,
+        "org": ORG,
+        "sobject": "Account",
+        "fields": [{"name": "Name", "type": "string"}],
+    }
+    path = tmp_path / "Account.json"
+    write_snapshot(committed, path)
+
+    calls = []
+    monkeypatch.setattr(
+        "soqlmodel.check.extract_describe",
+        lambda *a, **k: calls.append(a) or {"name": "Account", "fields": []},
+    )
+
+    with pytest.raises(ConfigError, match="no api_version configured"):
+        check_all(Config(org=ORG, objects={"Account": None}), tmp_path)
+
+    assert calls == []
+
+
+def test_the_pinned_version_reaches_the_extractor(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake(sobject, *, org, source, api_version):
+        seen["api_version"] = api_version
+        return {"name": sobject, "fields": [{"name": "Name", "type": "string"}]}
+
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake)
+
+    snapshot_all(Config(org=ORG, api_version="68.0", objects={"Account": None}), tmp_path)
+
+    assert seen["api_version"] == "68.0"

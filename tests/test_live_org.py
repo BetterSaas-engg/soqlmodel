@@ -38,6 +38,9 @@ key, and no message below echoes a value — only the variable that was empty.
     SOQLMODEL_LIVE_PRIVATEKEY_FILE=...         path to the private key, outside the repo
     SOQLMODEL_LIVE_DOMAIN=...                  e.g. "example--sandbox.my"
     SOQLMODEL_LIVE_PAGING_OBJECT=Contact       optional; must exceed one batch
+    SOQLMODEL_LIVE_SF_ALIAS=...                sf CLI alias for the SAME org, for the
+                                               two-source comparison (SFM-13c)
+    SOQLMODEL_LIVE_API_VERSION=68.0            optional; pins both sources
 """
 
 import os
@@ -79,7 +82,9 @@ if _missing:
 # collection error and the run fails, which is what an opted-in run deserves.
 from simple_salesforce import Salesforce
 
+from soqlmodel.describe import build_snapshot
 from soqlmodel.execute import execute, execute_iter
+from soqlmodel.extract import SOURCE_CREDENTIALS, SOURCE_SF, extract_describe
 from soqlmodel.fields import Field
 from soqlmodel.query import select
 
@@ -207,3 +212,59 @@ def test_execute_iter_stays_lazy_over_http(
     # Abandon the cursor rather than draining thousands of rows we do not need.
     stream.close()
     assert len(watched) == 1, "closing the iterator fetched more"
+
+
+# --- the credential extractor against the real org (SFM-13c) ------------------
+#
+# SFM-13a compared the two extraction sources by hand and found them identical
+# across every consumed key. This is that comparison made permanent: the same
+# claim, re-checked on demand instead of remembered from a report.
+
+SF_ALIAS = os.environ.get("SOQLMODEL_LIVE_SF_ALIAS")
+API_VERSION = os.environ.get("SOQLMODEL_LIVE_API_VERSION", "68.0")
+
+
+@pytest.mark.parametrize("sobject", ["Account", "Contact"])
+def test_both_sources_build_the_same_snapshot(sobject: str) -> None:
+    """The credential path and the sf path, same org, same pinned version.
+
+    Byte-identical snapshots or the credential extractor is not a drop-in
+    replacement, whatever the field-by-field tables say.
+
+    Both are fetched in one test rather than in two, so a schema change cannot
+    land between them and be misread as a source difference.
+    """
+    if not SF_ALIAS:
+        pytest.fail(
+            "SOQLMODEL_LIVE_SF_ALIAS is unset, so the sf side of this comparison "
+            "cannot run. Set it to the sf CLI alias for the same org the "
+            "SOQLMODEL_LIVE_* credentials point at. Refusing to skip: an "
+            "opted-in run that quietly compares nothing is the failure this gate exists to prevent."
+        )
+
+    # The credential extractor reads SOQLMODEL_SF_*, while this module's gate
+    # uses SOQLMODEL_LIVE_*. Bridging them here rather than reusing one set of
+    # names is the point of keeping them distinct -- see D21.
+    for target, live in (
+        ("SOQLMODEL_SF_USERNAME", "SOQLMODEL_LIVE_USERNAME"),
+        ("SOQLMODEL_SF_CONSUMER_KEY", "SOQLMODEL_LIVE_CONSUMER_KEY"),
+        ("SOQLMODEL_SF_PRIVATEKEY_FILE", "SOQLMODEL_LIVE_PRIVATEKEY_FILE"),
+        ("SOQLMODEL_SF_DOMAIN", "SOQLMODEL_LIVE_DOMAIN"),
+    ):
+        os.environ[target] = os.environ[live]
+
+    via_sf = extract_describe(sobject, org=SF_ALIAS, source=SOURCE_SF, api_version=API_VERSION)
+    via_credentials = extract_describe(
+        sobject, org=SF_ALIAS, source=SOURCE_CREDENTIALS, api_version=API_VERSION
+    )
+
+    snapshot_sf = build_snapshot(via_sf, org=SF_ALIAS)
+    snapshot_credentials = build_snapshot(via_credentials, org=SF_ALIAS)
+
+    assert snapshot_sf["fields"] == snapshot_credentials["fields"]
+    assert snapshot_sf == snapshot_credentials
+
+    print(
+        f"\n{sobject}: {len(snapshot_sf['fields'])} fields, "
+        f"identical from both sources at API {API_VERSION}"
+    )

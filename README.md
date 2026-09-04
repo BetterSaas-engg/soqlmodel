@@ -48,9 +48,11 @@ pip install soqlmodel
 
 Zero runtime dependencies. Schema extraction shells out to the
 [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli), which
-you have already authenticated.
+you have already authenticated — or, with `--source credentials`, talks to the
+org directly and needs no CLI at all. See
+[Extracting without the sf CLI](#extracting-without-the-sf-cli).
 
-To also execute queries:
+To execute queries, or to use `--source credentials`:
 
 ```bash
 pip install "soqlmodel[salesforce]"
@@ -66,6 +68,7 @@ Everything below is real output from a real org, not illustrative.
 
 ```toml
 org = "FULL Sandbox"
+api_version = "68.0"
 
 [objects]
 Account = ["Name", "AnnualRevenue"]
@@ -339,6 +342,52 @@ drift detection. Worth noting too that `soql`'s documented usage is
 If you want joins and typed row objects today, use `soql`. If you want your
 build to fail when the org changes, use this.
 
+## Extracting without the `sf` CLI
+
+`snapshot` and `check` extract through the `sf` CLI by default. Pass
+`--source credentials` and they talk to the org over REST instead, which is
+what makes them runnable in a container, in CI, or from a scheduler.
+
+```bash
+soqlmodel check --source credentials
+```
+
+Credentials come from the environment, never from `soqlmodel.toml` — that file
+is committed, and a credential in it would be too.
+
+| variable | what it is |
+|---|---|
+| `SOQLMODEL_SF_USERNAME` | the username the JWT is issued for |
+| `SOQLMODEL_SF_CONSUMER_KEY` | the connected app's consumer key |
+| `SOQLMODEL_SF_PRIVATEKEY_FILE` | path to the private key, outside the repo |
+| `SOQLMODEL_SF_DOMAIN` | e.g. `example--sandbox.my` |
+
+Needs the extra: `pip install "soqlmodel[salesforce]"`. Any missing variable,
+or a missing extra, is an error naming exactly what is absent, before any
+network call.
+
+**The source is never inferred.** Credentials sitting in your environment do
+not change how `soqlmodel` behaves; only the flag does. Presence of a secret is
+not consent to use it (D21).
+
+### `api_version` is required
+
+```toml
+api_version = "68.0"
+```
+
+Both sources are pinned to it, and there is no default. Left to themselves the
+`sf` CLI and simple-salesforce negotiate *different* versions, and two describes
+at different versions return different field lists — which `check` reports as
+`field no longer exists in the org` at CRITICAL. A red build, blamed on the org,
+caused by nothing but which client asked.
+
+A default would only pick a winner between the skews while hiding the pin. This
+is a config change for existing projects, and it is deliberate: one line now
+beats a false CRITICAL you cannot diagnose later.
+
+`generate` never touches an org and does not need it.
+
 ## On the word "snapshot"
 
 Salesforce already uses "snapshot" for
@@ -384,7 +433,10 @@ Stated plainly rather than discovered later.
 - **No relationship traversal.** Single-object queries only; no parent/child
   joins.
 - **Rows are not mapped onto models.** `execute` returns `list[dict]`.
-- **`sf` CLI required** for extract, which is awkward in a container.
+- **Extraction needs either the `sf` CLI or credentials.** `--source
+  credentials` removes the CLI requirement, but adds the `[salesforce]` extra
+  and four environment variables. There is no third option, and no way to
+  extract from a committed file alone — that is what `generate` is for.
 
 ## Development
 

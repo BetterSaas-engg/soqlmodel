@@ -870,3 +870,94 @@ rather than read from the live locale. Pinning matters: a fallback of
 runner and leave the bug in CI's blind spot a second time. The defect is
 "we did not say which encoding", not "this machine is Windows", and the
 test asserts the former.
+
+## D21 — org is a label, source is a flag, api_version is pinned (2026-09-04)
+
+Extraction shelled out to the `sf` CLI and nothing else, so `check` could
+not run anywhere `sf` is not installed — a container, a CI job, a
+scheduler. D2 made the schema file the seam specifically so the thing
+behind it could be swapped. This is that swap, and it forced three
+decisions.
+
+### `org` becomes a label
+
+It was two things at once: the name recorded in the snapshot, and the
+`--target-org` alias handed to the CLI. The credential source has no
+alias — identity comes from a username and a domain — so the second
+meaning does not survive.
+
+`org` is now a label. On the `sf` source it *also* serves as the alias,
+which is what keeps every existing config working unchanged. On the
+credential source it is only a name.
+
+This is safe because `compare_snapshots` diffs `format_version` and
+`fields`, never `org`. A snapshot taken through one source and checked
+through the other cannot report drift because the label differs —
+verified before relying on it, not assumed. `project.py`'s
+"no org configured" message was still calling it an alias, which sent
+readers looking for an `sf` org that need not exist; it now says name.
+
+### Source is an explicit flag, never inferred
+
+`--source sf|credentials`, default `sf`, on `snapshot` and `check` only —
+`generate` reads committed files and has no org to reach.
+
+The rejected alternative was inferring the source from whether the
+credential variables are set. That would mean a credential exported in a
+shell profile silently changes how the tool talks to an org, on a machine
+where nobody asked for it. **Presence of a secret is not consent to use
+it** — the same reasoning D19 applied to the live test gate, and it
+applies harder here because this is not a test.
+
+The flag is constrained by argparse `choices`, so an unknown source
+cannot arrive from a command line. That is why `extract_describe` raises
+plain `ValueError` on one rather than a `SoqlModelError`: past the CLI it
+can only be a caller with a typo, and dressing a bug as exit 2 is what
+D11 exists to stop.
+
+Credentials come from `SOQLMODEL_SF_*` and nowhere else — never from
+`soqlmodel.toml`, which is a committed file. They are deliberately
+*different names* from the `SOQLMODEL_LIVE_*` test-gate variables.
+Sharing one set would make a single variable both opt into a test suite
+and configure a production extractor, and those are not the same
+decision. The live test bridges the two explicitly, which is the shape
+that keeps the distinction honest.
+
+### `api_version` is required, with no default
+
+The largest of the three, and the least obvious.
+
+SFM-13a found the two sources agreed on every consumed key. They agreed
+because that run happened to negotiate matching versions. Left alone they
+do not: simple-salesforce defaults to its own, and the CLI takes one from
+the org and its own config. Two describes at different API versions
+return **different field lists**, and a differing field list is what
+`_compare_field` reports as `field no longer exists in the org` at
+CRITICAL.
+
+So the failure mode is a red build, blamed on the org, caused by nothing
+but which client asked. That is the "plausible answer instead of an
+error" this project exists to prevent, arriving through the tool meant to
+prevent it.
+
+A default would not fix it. Picking 68.0 for both sources would only
+choose a winner between the skews while leaving the pin invisible, and
+the day a user's org stopped serving that version they would get the same
+false CRITICAL with no setting to point at. The pin has to be the user's,
+stated in their config, versioned with their code — which is what the
+whole project is about.
+
+`sf sobject describe` accepts `--api-version`, checked rather than
+assumed, so both sources pin identically instead of one being pinned and
+the other trusted.
+
+Required by `snapshot` and `check`; ignored by `generate`, which never
+touches an org and must keep working unconfigured. Both call sites
+validate before the extraction loop, so a config missing the pin fails
+without contacting the org at all — the tests assert the extractor was
+never called, not merely that an error was raised.
+
+**This breaks existing configs**, deliberately. `soqlmodel.toml` now
+needs `api_version`. A silent default would have been the compatible
+choice and the wrong one: it would leave every existing user exposed to a
+false CRITICAL they cannot diagnose, to spare them one line of config.

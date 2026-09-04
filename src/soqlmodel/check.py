@@ -17,7 +17,7 @@ from typing import Any
 
 from soqlmodel.config import Config
 from soqlmodel.describe import SNAPSHOT_FORMAT_VERSION, build_snapshot, missing_fields
-from soqlmodel.extract import fetch_describe, read_snapshot
+from soqlmodel.extract import extract_describe, read_snapshot
 
 
 class Severity(StrEnum):
@@ -212,7 +212,9 @@ def check(config: Config, snapshot_path: str | Path) -> list[Change]:
     org = config.org or committed["org"]
     scope = config.scope_for(sobject)
 
-    describe = fetch_describe(sobject, org)
+    describe = extract_describe(
+        sobject, org=org, source=config.source, api_version=config.require_api_version()
+    )
     live = build_snapshot(describe, org=org, fields=scope, strict=False)
 
     return diff_snapshots(committed, live)
