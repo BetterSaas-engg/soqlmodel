@@ -83,7 +83,19 @@ def fetch_describe(sobject: str, org: str) -> dict[str, Any]:
 
     # check=False: a non-zero exit is reported below with sf's own stderr,
     # which is more use than CalledProcessError's repr.
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    #
+    # encoding="utf-8" is load-bearing, not decoration. `text=True` alone
+    # decodes with locale.getpreferredencoding(), which is cp1252 on a default
+    # Windows install. `sf --json` emits UTF-8 on every platform, so on such a
+    # machine a multi-byte label came back mojibake'd: U+0421 (Cyrillic ES,
+    # bytes D0 A1) arrived as "Ð¡". That corrupted the snapshot silently, made
+    # the file differ between a Windows dev and a Linux runner for the same
+    # unchanged org, and made `check` report a CRITICAL "value removed" for
+    # drift that never happened. Name the producer's encoding; never inherit
+    # the reader's (D20).
+    completed = subprocess.run(
+        command, capture_output=True, text=True, check=False, encoding="utf-8"
+    )
 
     if completed.returncode != 0:
         stderr = (completed.stderr or "").strip() or "(no stderr)"

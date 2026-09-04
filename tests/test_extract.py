@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from soqlmodel.describe import build_snapshot
 from soqlmodel.errors import SfCliError, SnapshotError
 from soqlmodel.extract import (
     fetch_describe,
@@ -204,3 +205,117 @@ def test_read_snapshot_reports_bad_encoding_with_the_filename(tmp_path):
 
     with pytest.raises(SnapshotError, match="Account.json is not valid UTF-8"):
         read_snapshot(path)
+
+
+# --- decoding the CLI's stdout (SFM-13b) -------------------------------------
+#
+# The bug these cover: `subprocess.run(text=True)` with no `encoding=` decodes
+# with locale.getpreferredencoding(). `sf --json` emits UTF-8 on every
+# platform, so on a cp1252 machine every multi-byte character came back
+# mojibake'd and went into the snapshot that way.
+#
+# Nothing else in this file reaches the decode: every other test hands
+# `fetch_describe` a CompletedProcess whose stdout is already a `str`, so the
+# decoding step has been mocked away. These two put it back.
+
+# U+0421 CYRILLIC CAPITAL LETTER ES -- indistinguishable from Latin "C" on
+# screen, which is why the real occurrence went unnoticed. UTF-8 encodes it as
+# D0 A1; cp1252 reads those two bytes as "Ð" + "¡".
+CYRILLIC_ES = "\u0421"
+
+_NON_ASCII_DESCRIBE = {
+    "name": "Account",
+    "fields": [
+        {
+            "name": "Shared_Data__c",
+            "label": f"{CYRILLIC_ES}licks",
+            "type": "picklist",
+            "picklistValues": [{"value": f"{CYRILLIC_ES}TR", "active": True}],
+        }
+    ],
+}
+
+# What the child process actually writes to the pipe: bytes, not str.
+_CHILD_STDOUT_BYTES = json.dumps(
+    {"status": 0, "result": _NON_ASCII_DESCRIBE}, ensure_ascii=False
+).encode("utf-8")
+
+
+def _fake_run_decoding_like_subprocess(command, encoding=None, **kwargs):
+    """Stand in for subprocess.run, including the part that decodes.
+
+    The real `run` decodes the child's bytes with `encoding`, falling back to
+    the platform's preferred encoding when the caller names none. The fallback
+    here is pinned to cp1252 rather than read from the live locale, so this
+    fails on a UTF-8 Linux runner too: the defect is "we did not say which
+    encoding", not "this machine happens to be Windows". A locale-dependent
+    test would pass in CI and leave the bug in place.
+    """
+    return subprocess.CompletedProcess(
+        args=command,
+        returncode=0,
+        stdout=_CHILD_STDOUT_BYTES.decode(encoding or "cp1252"),
+        stderr="",
+    )
+
+
+def test_stdout_is_decoded_as_utf8_not_the_platform_default():
+    """The picklist value must survive as U+0421, not as its cp1252 mojibake.
+
+    Asserted on the built snapshot because that is what gets committed and
+    diffed: a corrupted value here makes `check` report CRITICAL "value
+    removed" against an org that never changed.
+    """
+    with (
+        patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
+        patch("soqlmodel.extract.subprocess.run", _fake_run_decoding_like_subprocess),
+    ):
+        describe = fetch_describe("Account", "alias")
+
+    snapshot = build_snapshot(describe, org="alias")
+    field = snapshot["fields"][0]
+
+    assert field["picklistValues"] == [f"{CYRILLIC_ES}TR"]
+    assert field["label"] == f"{CYRILLIC_ES}licks"
+    # Spelled out so a failure names the actual defect rather than showing two
+    # strings that look identical in the diff.
+    assert "\u00d0" not in field["label"], "UTF-8 bytes were decoded as cp1252"
+
+
+def test_fetch_describe_names_the_encoding_explicitly():
+    """Pins the mechanism, so the guard cannot be lost to a refactor that
+    happens to keep the behaviour on a UTF-8 machine."""
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout='{"status": 0, "result": {"name": "Account"}}', stderr=""
+    )
+
+    with (
+        patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
+        patch("soqlmodel.extract.subprocess.run", return_value=completed) as run,
+    ):
+        fetch_describe("Account", "alias")
+
+    assert run.call_args.kwargs["encoding"] == "utf-8"
+
+
+def test_write_and_read_agree_on_non_ascii(tmp_path):
+    """The pair, not each half.
+
+    `test_write_snapshot_writes_non_ascii_literally` checks the bytes on disk
+    and `test_read_snapshot_round_trips_what_write_snapshot_wrote` checks the
+    round trip, but that one uses an ASCII-only snapshot -- so nothing asserted
+    that our own reader survives what our own writer emits for a real label.
+    A regression to `path.read_text()` (no encoding) in read_snapshot would
+    pass every other test in this file on a UTF-8 machine.
+    """
+    snapshot = {
+        "org": "alias",
+        "sobject": "Account",
+        "fields": [{"name": "Shared_Data__c", "picklistValues": [f"{CYRILLIC_ES}TR", "Größe"]}],
+    }
+
+    path = write_snapshot(snapshot, tmp_path / "Account.json")
+
+    assert read_snapshot(path) == snapshot
+    # D13 still holds for the same file: no BOM was introduced by writing it.
+    assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
