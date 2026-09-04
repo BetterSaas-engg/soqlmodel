@@ -355,7 +355,7 @@ def test_check_does_not_raise_when_a_declared_field_vanished(tmp_path, monkeypat
 
 
 def test_check_falls_back_to_the_snapshots_org(tmp_path, monkeypatch):
-    committed = snapshot(field("Name"), org="eyeo-qa")
+    committed = snapshot(field("Name"), org="qa-sandbox")
     path = tmp_path / "account.schema.json"
     path.write_text(json.dumps(committed), encoding="utf-8")
 
@@ -368,4 +368,4 @@ def test_check_falls_back_to_the_snapshots_org(tmp_path, monkeypatch):
     monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
     check(Config(), path)
 
-    assert captured["org"] == "eyeo-qa"
+    assert captured["org"] == "qa-sandbox"

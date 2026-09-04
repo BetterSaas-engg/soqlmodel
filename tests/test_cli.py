@@ -109,10 +109,10 @@ def test_schema_dir_is_honoured(project):
 
 
 def test_org_override_reaches_the_snapshot(project):
-    main(["snapshot", "--org", "eyeo-qa"])
+    main(["snapshot", "--org", "qa-sandbox"])
 
     snapshot = json.loads((project / "schema" / "Account.json").read_text(encoding="utf-8"))
-    assert snapshot["org"] == "eyeo-qa"
+    assert snapshot["org"] == "qa-sandbox"
 
 
 def test_global_options_work_before_the_subcommand(project):
