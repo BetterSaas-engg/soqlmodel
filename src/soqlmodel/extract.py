@@ -14,6 +14,8 @@ import json
 import os
 import shutil
 import subprocess
+from importlib import import_module
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +168,35 @@ def fetch_describe(sobject: str, org: str, api_version: str) -> dict[str, Any]:
     return unwrap_describe(payload)
 
 
+def _salesforce_class() -> Any:
+    """``simple_salesforce.Salesforce``, fetched without importing it statically.
+
+    This module never writes ``import simple_salesforce``, and that is the
+    whole point. :mod:`soqlmodel.execute` states the invariant: *nothing in
+    soqlmodel imports it, at runtime or for typing*, which is what keeps the
+    extra optional. An ``import`` statement here would break it in a way that
+    only shows up in CI, because mypy resolves imports against the installed
+    environment — and CI installs without the extra.
+
+    So presence is detected with ``find_spec``, exactly as
+    ``execute._require_client`` does, and the class is reached through
+    ``import_module``. Both take the module name as a *string*, so mypy never
+    looks for a stub and the result is ``Any`` in both environments. That is
+    the property this needs: a ``# type: ignore`` cannot deliver it, because
+    whichever error it silences in one environment it is unused in the other,
+    and ``--strict`` fails on the unused one.
+
+    Raises:
+        CredentialError: if the extra is not installed, naming the pip command.
+    """
+    if find_spec("simple_salesforce") is None:
+        raise CredentialError(
+            f"--source credentials needs simple-salesforce, which is not "
+            f"installed. Install it with: {INSTALL_HINT}"
+        )
+    return import_module("simple_salesforce").Salesforce
+
+
 def fetch_describe_via_credentials(sobject: str, api_version: str) -> dict[str, Any]:
     """Describe one sobject over REST, authenticating from the environment.
 
@@ -187,24 +218,9 @@ def fetch_describe_via_credentials(sobject: str, api_version: str) -> dict[str, 
             Both are raised before any network call, naming what is missing.
     """
     credentials = require_credentials()
+    salesforce = _salesforce_class()
 
-    try:
-        # The documented import path, kept despite needing the ignore: mypy
-        # --strict forbids implicit re-exports and simple_salesforce declares
-        # no __all__. Reaching into simple_salesforce.api instead would satisfy
-        # the checker by depending on an internal module, which is the more
-        # fragile of the two ways to be wrong.
-        from simple_salesforce import Salesforce  # type: ignore[attr-defined]
-    except ImportError as exc:
-        # Checked here rather than at import time: simple-salesforce is an
-        # optional extra (D1/D15), and snapshot/generate/check on the sf path
-        # must keep working with it absent.
-        raise CredentialError(
-            f"--source credentials needs simple-salesforce, which is not "
-            f"installed. Install it with: {INSTALL_HINT}"
-        ) from exc
-
-    client = Salesforce(
+    client = salesforce(
         username=credentials["username"],
         consumer_key=credentials["consumer_key"],
         privatekey_file=credentials["privatekey_file"],

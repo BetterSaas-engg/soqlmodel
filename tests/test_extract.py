@@ -1,4 +1,3 @@
-import builtins
 import json
 import subprocess
 from unittest.mock import patch
@@ -413,18 +412,36 @@ def test_credentials_are_checked_before_the_extra_is_imported(monkeypatch):
 
 
 def test_a_missing_extra_names_the_install_command(monkeypatch):
+    """Absence is detected with find_spec, never by attempting an import.
+
+    That is execute.py's mechanism and the reason it holds: a static
+    `import simple_salesforce` would make mypy --strict fail wherever the
+    extra is not installed, which is exactly how CI runs.
+    """
     _set_credentials(monkeypatch)
-    real_import = builtins.__import__
-
-    def no_simple_salesforce(name, *args, **kwargs):
-        if name == "simple_salesforce":
-            raise ImportError("No module named 'simple_salesforce'")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_simple_salesforce)
+    monkeypatch.setattr("soqlmodel.extract.find_spec", lambda name: None)
 
     with pytest.raises(CredentialError, match=r"pip install"):
         fetch_describe_via_credentials("Account", "68.0")
+
+
+def test_no_module_in_the_package_imports_the_optional_extra_statically():
+    """The invariant execute.py declares, asserted rather than trusted.
+
+    A static import is invisible locally (the extra is installed) and fails
+    mypy --strict in CI (it is not). Cheaper to assert here than to rediscover
+    on a red build.
+    """
+    import pathlib
+
+    offenders = []
+    for module in sorted(pathlib.Path("src/soqlmodel").glob("*.py")):
+        for number, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith(("import simple_salesforce", "from simple_salesforce")):
+                offenders.append(f"{module.name}:{number}")
+
+    assert offenders == [], f"static import of the optional extra at {offenders}"
 
 
 # --- the dispatcher -----------------------------------------------------------
