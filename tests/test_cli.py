@@ -9,6 +9,7 @@ import pytest
 
 from soqlmodel.cli import EXIT_DRIFT, EXIT_ERROR, EXIT_OK, build_parser, main
 from soqlmodel.errors import SfCliError
+from soqlmodel.extract import extract_describe as real_extract_describe
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,11 +60,11 @@ def project(tmp_path, monkeypatch):
     """A project directory with a config, and a fake org behind it."""
     (tmp_path / "soqlmodel.toml").write_text(CONFIG, encoding="utf-8")
 
-    def fake_fetch(sobject, org, api_version):
+    def fake_fetch(sobject, *, org, source, api_version):
         return ORG_SCHEMA[sobject]
 
-    monkeypatch.setattr("soqlmodel.project.fetch_describe", fake_fetch)
-    monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.check.extract_describe", fake_fetch)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -232,10 +233,10 @@ def test_generate_without_snapshots_is_a_clean_error(project, capsys):
 
 
 def test_an_unreachable_org_is_a_clean_error(project, monkeypatch, capsys):
-    def unreachable(sobject, org, api_version):
+    def unreachable(sobject, *, org, source, api_version):
         raise SfCliError("sf sobject describe exited 1: No org found for alias 'nope'")
 
-    monkeypatch.setattr("soqlmodel.project.fetch_describe", unreachable)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", unreachable)
 
     assert main(["snapshot"]) == EXIT_ERROR
 
@@ -308,7 +309,7 @@ def test_a_bug_reaches_the_terminal_as_a_traceback(project):
     injected = (
         "import sys\n"
         "import soqlmodel.project as project\n"
-        "project.fetch_describe = lambda sobject, org, api_version: {'name': sobject, 'fields': []}\n"
+        "project.extract_describe = lambda sobject, **kw: {'name': sobject, 'fields': []}\n"
         "def buggy(*args, **kwargs):\n"
         "    raise ValueError('bug in the snapshot builder')\n"
         "project.build_snapshot = buggy\n"
@@ -442,3 +443,94 @@ def test_python_m_works_too():
 
     assert result.returncode == EXIT_OK
     assert "soqlmodel" in result.stdout
+
+
+# --- --source (SFM-13c) -------------------------------------------------------
+
+
+def test_the_default_source_is_sf():
+    """Existing invocations keep the behaviour they had before the flag."""
+    assert build_parser().parse_args(["snapshot"]).source == "sf"
+    assert build_parser().parse_args(["check"]).source == "sf"
+
+
+def test_source_is_accepted_on_snapshot_and_check():
+    assert (
+        build_parser().parse_args(["snapshot", "--source", "credentials"]).source == "credentials"
+    )
+    assert build_parser().parse_args(["check", "--source", "credentials"]).source == "credentials"
+
+
+def test_generate_has_no_source_flag():
+    """It reads committed files and never reaches an org."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["generate", "--source", "credentials"])
+
+
+def test_an_unknown_source_is_a_usage_error_not_a_traceback():
+    """argparse `choices` catches it, so the dispatcher's ValueError is
+    unreachable from a command line."""
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["snapshot", "--source", "nope"])
+
+
+def test_the_selected_source_reaches_the_extractor(project, monkeypatch):
+    seen = {}
+
+    def fake_fetch(sobject, *, org, source, api_version):
+        seen["source"] = source
+        return ORG_SCHEMA[sobject]
+
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake_fetch)
+
+    main(["snapshot", "--source", "credentials"])
+
+    assert seen["source"] == "credentials"
+
+
+def test_the_default_source_reaches_the_extractor_as_sf(project, monkeypatch):
+    seen = {}
+
+    def fake_fetch(sobject, *, org, source, api_version):
+        seen["source"] = source
+        return ORG_SCHEMA[sobject]
+
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake_fetch)
+
+    main(["snapshot"])
+
+    assert seen["source"] == "sf"
+
+
+def test_missing_credentials_are_a_clean_error_naming_the_variables(project, monkeypatch, capsys):
+    """Exit 2 and one line, at the origin, before any network call."""
+    # The project fixture stubs the extractor; put the real one back, or this
+    # would assert against a fake and prove nothing.
+    monkeypatch.setattr("soqlmodel.project.extract_describe", real_extract_describe)
+
+    for var in (
+        "SOQLMODEL_SF_USERNAME",
+        "SOQLMODEL_SF_CONSUMER_KEY",
+        "SOQLMODEL_SF_PRIVATEKEY_FILE",
+        "SOQLMODEL_SF_DOMAIN",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    assert main(["snapshot", "--source", "credentials"]) == EXIT_ERROR
+
+    captured = capsys.readouterr()
+    assert "SOQLMODEL_SF_USERNAME" in captured.err
+    assert "Traceback" not in captured.err
+    assert len(captured.err.strip().splitlines()) == 1
+
+
+def test_a_missing_api_version_is_a_clean_error(project, capsys):
+    (project / "soqlmodel.toml").write_text(
+        'org = "FULL Sandbox"\n\n[objects]\nAccount = ["Name"]\n', encoding="utf-8"
+    )
+
+    assert main(["snapshot"]) == EXIT_ERROR
+
+    captured = capsys.readouterr()
+    assert "no api_version configured" in captured.err
+    assert "Traceback" not in captured.err

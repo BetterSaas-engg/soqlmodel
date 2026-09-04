@@ -18,6 +18,7 @@ from typing import NoReturn
 from soqlmodel.check import exit_code, format_report
 from soqlmodel.config import CONFIG_FILENAME, Config, load_config
 from soqlmodel.errors import ConfigError, SoqlModelError
+from soqlmodel.extract import SOURCE_SF, SOURCES
 from soqlmodel.project import (
     DEFAULT_SCHEMA_DIR,
     check_all,
@@ -96,6 +97,29 @@ def _common_options() -> argparse.ArgumentParser:
     return common
 
 
+def _add_source(parser: argparse.ArgumentParser) -> None:
+    """Add --source to a command that talks to an org.
+
+    Only on `snapshot` and `check`; `generate` reads committed files and has
+    no org to reach. Not in `_common_options` for that reason -- a flag that
+    does nothing on a third of the commands invites the question of what it
+    does there.
+
+    Defaults to sf, so existing invocations keep working unchanged, and is
+    constrained by `choices`, so a typo is a usage error from argparse rather
+    than a ValueError out of the dispatcher.
+    """
+    parser.add_argument(
+        "--source",
+        choices=SOURCES,
+        default=SOURCE_SF,
+        help=(
+            "where to extract from: the sf CLI, or REST using credentials from "
+            f"the environment (default: {SOURCE_SF})"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = _common_options()
     parser = argparse.ArgumentParser(
@@ -109,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    subcommands.add_parser(
+    snapshot = subcommands.add_parser(
         "snapshot",
         parents=[common],
         help="extract from the org and write schema/<SObject>.json",
@@ -118,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
             "declared field the org does not have is an error."
         ),
     )
+    _add_source(snapshot)
 
     generate = subcommands.add_parser(
         "generate",
@@ -133,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"where to write the module (default: {DEFAULT_OUTPUT})",
     )
 
-    subcommands.add_parser(
+    check = subcommands.add_parser(
         "check",
         parents=[common],
         help="diff committed snapshots against the org",
@@ -142,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Exits 1 if any CRITICAL drift is found."
         ),
     )
+    _add_source(check)
 
     return parser
 
@@ -155,8 +181,18 @@ def _load(args: argparse.Namespace) -> Config:
         )
 
     config = load_config(path)
+
     org = getattr(args, "org", None)
-    return dataclasses.replace(config, org=org) if org else config
+    if org:
+        config = dataclasses.replace(config, org=org)
+
+    # Only snapshot and check define --source; generate never reaches an org,
+    # so on that command the attribute is absent and the default stands.
+    source = getattr(args, "source", None)
+    if source:
+        config = dataclasses.replace(config, source=source)
+
+    return config
 
 
 def _schema_dir(args: argparse.Namespace) -> str:

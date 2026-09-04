@@ -11,12 +11,58 @@ parsing is where the bugs live, and it is testable without an org.
 
 import codecs
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from soqlmodel.errors import SfCliError, SnapshotError
+from soqlmodel.errors import CredentialError, SfCliError, SnapshotError
+
+SOURCE_SF = "sf"
+SOURCE_CREDENTIALS = "credentials"
+SOURCES = (SOURCE_SF, SOURCE_CREDENTIALS)
+
+INSTALL_HINT = 'pip install "soqlmodel[salesforce]"'
+
+# Credentials for the REST source, read from the environment and nowhere else.
+# Deliberately distinct from the SOQLMODEL_LIVE_* names, which gate the live
+# test suite: sharing them would mean opting into tests and configuring a
+# production extractor with one variable, and the two decisions are not the
+# same decision.
+#
+# The mapping is name -> environment variable, so an error can name the
+# variable the user has to set rather than an internal key.
+CREDENTIAL_ENV_VARS = {
+    "username": "SOQLMODEL_SF_USERNAME",
+    "consumer_key": "SOQLMODEL_SF_CONSUMER_KEY",
+    "privatekey_file": "SOQLMODEL_SF_PRIVATEKEY_FILE",
+    "domain": "SOQLMODEL_SF_DOMAIN",
+}
+
+
+def require_credentials() -> dict[str, str]:
+    """Read the four credential variables, or say which ones are missing.
+
+    Every missing variable is reported at once. Reporting only the first turns
+    configuring this into four failed runs, and the failure is not interesting
+    enough to deserve four.
+
+    Never logs or echoes a value: the message names variables, not contents.
+
+    Raises:
+        CredentialError: naming each unset or empty variable.
+    """
+    found = {key: os.environ.get(var, "") for key, var in CREDENTIAL_ENV_VARS.items()}
+    missing = sorted(CREDENTIAL_ENV_VARS[key] for key, value in found.items() if not value.strip())
+
+    if missing:
+        raise CredentialError(
+            f"--source credentials needs these environment variables, which are "
+            f"unset or empty: {', '.join(missing)}. Credentials are read from the "
+            f"environment only, never from soqlmodel.toml."
+        )
+    return found
 
 
 def unwrap_describe(payload: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +164,95 @@ def fetch_describe(sobject: str, org: str, api_version: str) -> dict[str, Any]:
         raise SfCliError(f"sf returned output that is not JSON: {exc}") from exc
 
     return unwrap_describe(payload)
+
+
+def fetch_describe_via_credentials(sobject: str, api_version: str) -> dict[str, Any]:
+    """Describe one sobject over REST, authenticating from the environment.
+
+    The other half of :func:`fetch_describe`. Same return shape — a raw
+    describe dict, ready for ``build_snapshot`` — reached without the ``sf``
+    CLI, so `snapshot` and `check` can run in a container or a scheduler.
+
+    There is no envelope to strip here. ``unwrap_describe`` exists because the
+    CLI wraps its output in ``{status, result}``; REST returns the describe
+    itself, so this path deliberately does not call it. SFM-13a verified the
+    two payloads are otherwise identical across every key we consume, which is
+    why no normalization layer sits between this and ``build_snapshot``.
+
+    Credentials come from the environment and only from the environment. They
+    are never read from ``soqlmodel.toml``, which is a committed file.
+
+    Raises:
+        CredentialError: if the extra is not installed, or a variable is unset.
+            Both are raised before any network call, naming what is missing.
+    """
+    credentials = require_credentials()
+
+    try:
+        # The documented import path, kept despite needing the ignore: mypy
+        # --strict forbids implicit re-exports and simple_salesforce declares
+        # no __all__. Reaching into simple_salesforce.api instead would satisfy
+        # the checker by depending on an internal module, which is the more
+        # fragile of the two ways to be wrong.
+        from simple_salesforce import Salesforce  # type: ignore[attr-defined]
+    except ImportError as exc:
+        # Checked here rather than at import time: simple-salesforce is an
+        # optional extra (D1/D15), and snapshot/generate/check on the sf path
+        # must keep working with it absent.
+        raise CredentialError(
+            f"--source credentials needs simple-salesforce, which is not "
+            f"installed. Install it with: {INSTALL_HINT}"
+        ) from exc
+
+    client = Salesforce(
+        username=credentials["username"],
+        consumer_key=credentials["consumer_key"],
+        privatekey_file=credentials["privatekey_file"],
+        domain=credentials["domain"],
+        # Pinned, never negotiated. See D21 and Config.require_api_version.
+        version=api_version,
+    )
+
+    described = getattr(client, sobject).describe()
+    if not isinstance(described, dict):
+        raise CredentialError(
+            f"describe() for {sobject} returned {type(described).__name__}, not a dict"
+        )
+    # simple-salesforce hands back an OrderedDict of OrderedDicts. Normalising
+    # to plain dicts keeps what reaches build_snapshot identical in type as
+    # well as content to what the sf path produces -- so a snapshot cannot
+    # differ by which source built it.
+    result: dict[str, Any] = json.loads(json.dumps(described))
+    return result
+
+
+def extract_describe(sobject: str, *, org: str, source: str, api_version: str) -> dict[str, Any]:
+    """Describe one sobject from whichever source was selected.
+
+    The common signature the ticket asks for: `snapshot` and `check` call this
+    and never learn which extractor ran.
+
+    ``org`` is a label under D21. The ``sf`` source additionally uses it as the
+    ``--target-org`` alias, which is what keeps existing configs working; the
+    credential source ignores it entirely and authenticates from the
+    environment.
+
+    Deliberately takes ``source`` and ``api_version`` as plain arguments rather
+    than a :class:`Config`. This module is stage 1 and sits below config in the
+    import graph; keeping it that way means extraction stays callable without
+    a config object at all.
+
+    Raises:
+        ValueError: if ``source`` is not a known name. A caller passing a
+            typo'd literal is a bug, not a user failure -- the CLI constrains
+            the flag to `choices`, so an unknown value cannot arrive from a
+            command line (D11).
+    """
+    if source == SOURCE_SF:
+        return fetch_describe(sobject, org, api_version)
+    if source == SOURCE_CREDENTIALS:
+        return fetch_describe_via_credentials(sobject, api_version)
+    raise ValueError(f"unknown extraction source {source!r}; expected one of {', '.join(SOURCES)}")
 
 
 def write_snapshot(snapshot: dict[str, Any], path: str | Path) -> Path:

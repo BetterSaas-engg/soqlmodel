@@ -38,6 +38,19 @@ class SfCliError(SoqlModelError):
     """The ``sf`` CLI could not be run, or reported a failure."""
 
 
+class CredentialError(SoqlModelError):
+    """The credential extraction source could not be used.
+
+    A missing environment variable, or the optional simple-salesforce extra
+    not being installed. Its sibling is :class:`SfCliError`: one class per
+    extraction source, so the class alone says which one was asked for.
+
+    Raised before any network call. An error from Salesforce itself, or from
+    simple-salesforce, is not this — it propagates as its own type, the same
+    reasoning as :class:`ExecuteError` (D15).
+    """
+
+
 class SnapshotError(SoqlModelError):
     """A describe payload or snapshot file could not be read as a snapshot."""
 

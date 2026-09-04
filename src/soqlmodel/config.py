@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from soqlmodel.errors import ConfigError
+from soqlmodel.extract import SOURCE_SF
 from soqlmodel.generate import DEFAULT_LINE_LENGTH
 
 CONFIG_FILENAME = "soqlmodel.toml"
@@ -52,6 +53,11 @@ class Config:
     # not set one, which is an error at the point of extraction rather than
     # here — `generate` has no use for it and must keep working without one.
     api_version: str | None = None
+    # Which extractor runs. Set by the --source flag, never parsed from the
+    # toml and never inferred from whether credentials happen to be present in
+    # the environment: choosing to talk to an org over the network is an
+    # explicit decision, not something a stray variable makes for you (D19/D21).
+    source: str = SOURCE_SF
     objects: dict[str, Scope] = dataclasses.field(default_factory=dict)
     path: Path | None = None
     # Matches the formatter the generated module will be checked by. 88 is

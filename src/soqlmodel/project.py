@@ -21,7 +21,7 @@ from soqlmodel.check import Change, Severity, check, sort_changes
 from soqlmodel.config import Config
 from soqlmodel.describe import build_snapshot
 from soqlmodel.errors import ConfigError, SoqlModelError
-from soqlmodel.extract import fetch_describe, read_snapshot, write_snapshot
+from soqlmodel.extract import extract_describe, read_snapshot, write_snapshot
 from soqlmodel.generate import write_combined_module
 
 DEFAULT_SCHEMA_DIR = "schema"
@@ -127,7 +127,7 @@ def snapshot_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) ->
 
     written = []
     for sobject in sobjects:
-        describe = fetch_describe(sobject, org, api_version)
+        describe = extract_describe(sobject, org=org, source=config.source, api_version=api_version)
         snapshot = build_snapshot(describe, org=org, fields=config.scope_for(sobject), strict=True)
         written.append(write_snapshot(snapshot, snapshot_path(sobject, directory)))
     return written

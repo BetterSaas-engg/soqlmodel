@@ -65,13 +65,13 @@ ORG_SCHEMA = {
 def org(monkeypatch):
     """A fake org, patched into both the extract and check call sites."""
 
-    def fake_fetch(sobject, org_alias, api_version):
+    def fake_fetch(sobject, *, org, source, api_version):
         if sobject not in ORG_SCHEMA:
             raise KeyError(sobject)
         return ORG_SCHEMA[sobject]
 
-    monkeypatch.setattr("soqlmodel.project.fetch_describe", fake_fetch)
-    monkeypatch.setattr("soqlmodel.check.fetch_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake_fetch)
+    monkeypatch.setattr("soqlmodel.check.extract_describe", fake_fetch)
     return ORG_SCHEMA
 
 
@@ -439,7 +439,7 @@ def test_snapshot_all_without_an_api_version_fails_before_any_extraction(tmp_pat
     config is missing the pin."""
     calls = []
     monkeypatch.setattr(
-        "soqlmodel.project.fetch_describe",
+        "soqlmodel.project.extract_describe",
         lambda *a, **k: calls.append(a) or {"name": "Account", "fields": []},
     )
 
@@ -461,7 +461,7 @@ def test_check_without_an_api_version_fails_before_any_extraction(tmp_path, monk
 
     calls = []
     monkeypatch.setattr(
-        "soqlmodel.check.fetch_describe",
+        "soqlmodel.check.extract_describe",
         lambda *a, **k: calls.append(a) or {"name": "Account", "fields": []},
     )
 
@@ -474,11 +474,11 @@ def test_check_without_an_api_version_fails_before_any_extraction(tmp_path, monk
 def test_the_pinned_version_reaches_the_extractor(tmp_path, monkeypatch):
     seen = {}
 
-    def fake(sobject, org, api_version):
+    def fake(sobject, *, org, source, api_version):
         seen["api_version"] = api_version
         return {"name": sobject, "fields": [{"name": "Name", "type": "string"}]}
 
-    monkeypatch.setattr("soqlmodel.project.fetch_describe", fake)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", fake)
 
     snapshot_all(Config(org=ORG, api_version="68.0", objects={"Account": None}), tmp_path)
 

@@ -1,3 +1,4 @@
+import builtins
 import json
 import subprocess
 from unittest.mock import patch
@@ -5,10 +6,17 @@ from unittest.mock import patch
 import pytest
 
 from soqlmodel.describe import build_snapshot
-from soqlmodel.errors import SfCliError, SnapshotError
+from soqlmodel.errors import CredentialError, SfCliError, SnapshotError, SoqlModelError
 from soqlmodel.extract import (
+    CREDENTIAL_ENV_VARS,
+    SOURCE_CREDENTIALS,
+    SOURCE_SF,
+    SOURCES,
+    extract_describe,
     fetch_describe,
+    fetch_describe_via_credentials,
     read_snapshot,
+    require_credentials,
     unwrap_describe,
     write_snapshot,
 )
@@ -322,3 +330,191 @@ def test_write_and_read_agree_on_non_ascii(tmp_path):
     assert read_snapshot(path) == snapshot
     # D13 still holds for the same file: no BOM was introduced by writing it.
     assert not path.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+# --- the credential source (SFM-13c) ------------------------------------------
+
+
+def _clear_credentials(monkeypatch):
+    for var in CREDENTIAL_ENV_VARS.values():
+        monkeypatch.delenv(var, raising=False)
+
+
+def _set_credentials(monkeypatch, **overrides):
+    values = {
+        "SOQLMODEL_SF_USERNAME": "user@example.com",
+        "SOQLMODEL_SF_CONSUMER_KEY": "key",
+        "SOQLMODEL_SF_PRIVATEKEY_FILE": "/nowhere/server.key",
+        "SOQLMODEL_SF_DOMAIN": "example--sandbox.my",
+    }
+    values.update(overrides)
+    for var, value in values.items():
+        monkeypatch.setenv(var, value)
+
+
+def test_every_missing_credential_variable_is_named_at_once(monkeypatch):
+    """All four, not just the first. Reporting one at a time turns setting
+    this up into four failed runs."""
+    _clear_credentials(monkeypatch)
+
+    with pytest.raises(CredentialError) as exc:
+        require_credentials()
+
+    for var in CREDENTIAL_ENV_VARS.values():
+        assert var in str(exc.value)
+
+
+def test_a_single_missing_credential_variable_is_named(monkeypatch):
+    _set_credentials(monkeypatch)
+    monkeypatch.delenv("SOQLMODEL_SF_CONSUMER_KEY")
+
+    with pytest.raises(CredentialError, match="SOQLMODEL_SF_CONSUMER_KEY"):
+        require_credentials()
+
+
+def test_a_blank_credential_variable_counts_as_missing(monkeypatch):
+    """An exported-but-empty variable is the shape a broken CI secret takes."""
+    _set_credentials(monkeypatch, SOQLMODEL_SF_DOMAIN="   ")
+
+    with pytest.raises(CredentialError, match="SOQLMODEL_SF_DOMAIN"):
+        require_credentials()
+
+
+def test_the_credential_error_never_echoes_a_value(monkeypatch):
+    _set_credentials(monkeypatch, SOQLMODEL_SF_CONSUMER_KEY="")
+
+    with pytest.raises(CredentialError) as exc:
+        require_credentials()
+
+    assert "user@example.com" not in str(exc.value)
+    assert "/nowhere/server.key" not in str(exc.value)
+
+
+def test_the_live_gate_variables_are_not_reused(monkeypatch):
+    """SOQLMODEL_LIVE_* gates the test suite; these configure an extractor.
+    Sharing them would make one variable do two unrelated jobs."""
+    _clear_credentials(monkeypatch)
+    monkeypatch.setenv("SOQLMODEL_LIVE_USERNAME", "user@example.com")
+    monkeypatch.setenv("SOQLMODEL_LIVE_CONSUMER_KEY", "key")
+    monkeypatch.setenv("SOQLMODEL_LIVE_PRIVATEKEY_FILE", "/nowhere/server.key")
+    monkeypatch.setenv("SOQLMODEL_LIVE_DOMAIN", "example--sandbox.my")
+
+    with pytest.raises(CredentialError, match="SOQLMODEL_SF_USERNAME"):
+        require_credentials()
+
+
+def test_credentials_are_checked_before_the_extra_is_imported(monkeypatch):
+    """Ordering, so someone without the extra and without variables is told
+    about the variables rather than being sent to install a package first."""
+    _clear_credentials(monkeypatch)
+
+    with pytest.raises(CredentialError, match="environment variables"):
+        fetch_describe_via_credentials("Account", "68.0")
+
+
+def test_a_missing_extra_names_the_install_command(monkeypatch):
+    _set_credentials(monkeypatch)
+    real_import = builtins.__import__
+
+    def no_simple_salesforce(name, *args, **kwargs):
+        if name == "simple_salesforce":
+            raise ImportError("No module named 'simple_salesforce'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_simple_salesforce)
+
+    with pytest.raises(CredentialError, match=r"pip install"):
+        fetch_describe_via_credentials("Account", "68.0")
+
+
+# --- the dispatcher -----------------------------------------------------------
+
+
+def test_the_default_source_is_sf():
+    assert SOURCE_SF == "sf"
+    assert SOURCES[0] == SOURCE_SF
+
+
+def test_extract_describe_routes_to_the_sf_path(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        "soqlmodel.extract.fetch_describe",
+        lambda sobject, org, api_version: (
+            seen.update(sobject=sobject, org=org, api_version=api_version) or {"name": sobject}
+        ),
+    )
+
+    result = extract_describe("Account", org="alias", source=SOURCE_SF, api_version="68.0")
+
+    assert result == {"name": "Account"}
+    assert seen == {"sobject": "Account", "org": "alias", "api_version": "68.0"}
+
+
+def test_extract_describe_routes_to_the_credential_path_and_ignores_org(monkeypatch):
+    """org is a label on this source (D21): it is recorded in the snapshot but
+    plays no part in reaching the org."""
+    seen = {}
+    monkeypatch.setattr(
+        "soqlmodel.extract.fetch_describe_via_credentials",
+        lambda sobject, api_version: (
+            seen.update(sobject=sobject, api_version=api_version) or {"name": sobject}
+        ),
+    )
+
+    result = extract_describe(
+        "Account", org="ignored", source=SOURCE_CREDENTIALS, api_version="68.0"
+    )
+
+    assert result == {"name": "Account"}
+    assert seen == {"sobject": "Account", "api_version": "68.0"}
+
+
+def test_an_unknown_source_is_a_bug_not_a_user_error():
+    """ValueError, not SoqlModelError: the CLI constrains --source with
+    `choices`, so an unknown value can only come from a caller with a typo,
+    and the CLI must not dress a bug up as exit 2 (D11)."""
+    with pytest.raises(ValueError, match="unknown extraction source"):
+        extract_describe("Account", org="a", source="nope", api_version="68.0")
+
+    assert not issubclass(ValueError, SoqlModelError)
+
+
+def test_both_sources_produce_the_same_snapshot_from_the_same_content(monkeypatch):
+    """The claim SFM-13a made against a live org, pinned offline.
+
+    The sf side arrives wrapped in the CLI envelope and the credential side
+    does not; after each path is done, build_snapshot must see the same thing.
+    """
+    describe = {
+        "name": "Account",
+        "fields": [
+            {
+                "name": "Name",
+                "label": "Account Name",
+                "type": "string",
+                "nillable": False,
+                "length": 255,
+            }
+        ],
+    }
+
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout=json.dumps({"status": 0, "result": describe}), stderr=""
+    )
+    with (
+        patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
+        patch("soqlmodel.extract.subprocess.run", return_value=completed),
+    ):
+        via_sf = extract_describe("Account", org="alias", source=SOURCE_SF, api_version="68.0")
+
+    # The REST payload: the same describe, with no envelope around it.
+    monkeypatch.setattr(
+        "soqlmodel.extract.fetch_describe_via_credentials",
+        lambda sobject, api_version: json.loads(json.dumps(describe)),
+    )
+    via_credentials = extract_describe(
+        "Account", org="alias", source=SOURCE_CREDENTIALS, api_version="68.0"
+    )
+
+    assert via_sf == via_credentials
+    assert build_snapshot(via_sf, org="alias") == build_snapshot(via_credentials, org="alias")
