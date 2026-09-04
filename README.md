@@ -362,16 +362,24 @@ live in `schema/`.
 
 Stated plainly rather than discovered later.
 
-- **The simple-salesforce execution path has never run against a live org.**
-  This is the largest untested claim in v1. What *is* verified: paging against
-  real cursors — 4786 rows drained from a real org in three batches of
-  2000 / 2000 / 786, matching `COUNT()` exactly — but through a client backed
-  by `sf api request rest` that satisfies the same interface, not through
-  simple-salesforce. Separately, CI drives the genuine
-  `simple_salesforce.Salesforce.query` and `.query_more` with a stubbed
-  transport, which exercises their real signatures, URL building and response
-  parsing without an org. What remains unproven is those two methods talking to
-  Salesforce over the wire.
+- **The simple-salesforce execution path is verified by hand, not by CI.** A
+  JWT-authenticated `simple_salesforce.Salesforce` has now executed through
+  `execute` against a real org: 4786 Contact rows drained in three batches of
+  2000 / 2000 / 786, matching `COUNT()` exactly, through simple-salesforce's own
+  `query` and `query_more` over HTTP. `execute_iter`'s laziness was checked on
+  the same cursor — building the iterator issues no request, and the first row
+  costs one batch out of three. That closes the gap this section used to
+  describe.
+
+  What it does not close: **CI does not run these tests, and will not.** They
+  live in `tests/test_live_org.py`, are skipped unless `SOQLMODEL_LIVE_ORG=1`,
+  and need credentials that exist only on a developer machine — a build that can
+  go red because a sandbox was refreshed or a cert expired is worse than no
+  build. So the wire path is confirmed as of a point in time, against one org,
+  one auth flow and one object, rather than continuously. What CI *does* run
+  every commit is the transport-stubbed conformance suite, which drives the
+  genuine `query` and `query_more` — real signatures, URL building, response
+  parsing — without an org.
 - **Compound field types** (address, location) fall back to `Any`.
 - **No relationship traversal.** Single-object queries only; no parent/child
   joins.
@@ -387,6 +395,12 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy --strict src/soqlmodel
 ```
+
+That suite is offline. The live-org tests are opt-in and skipped by default;
+`SOQLMODEL_LIVE_ORG=1` enables them and turns any subsequent skip into a
+failure, so an opted-in run cannot pass by testing nothing. Credentials come
+from the environment only — see the docstring in `tests/test_live_org.py` for
+the variables, and never put a key or an org name in this repo.
 
 `DECISIONS.md` records why things are the way they are, and is append-only.
 `KNOWN_ISSUES.md` records what is wrong or unverified. Read both before

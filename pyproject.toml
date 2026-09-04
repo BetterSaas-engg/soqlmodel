@@ -51,7 +51,13 @@ testpaths = ["tests"]
 # Registered, but NOT excluded by default: the wheel check guards a failure
 # mode nothing else can see, so it runs unless someone opts out explicitly
 # with -m "not slow".
-markers = ["slow: builds artifacts or shells out to slow tools"]
+markers = [
+    "slow: builds artifacts or shells out to slow tools",
+    # Opt-in via SOQLMODEL_LIVE_ORG=1, not via this marker: the marker makes an
+    # opted-in run selectable, while the env var is what lets one happen at all.
+    # See tests/test_live_org.py.
+    "live: talks to a real Salesforce org over the network",
+]
 
 [dependency-groups]
 dev = [
