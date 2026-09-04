@@ -799,3 +799,74 @@ there would silently drop the only coverage of the boundary.
 username, host, key path or consumer key appears anywhere in the tree,
 and the gate's error messages name the empty variable rather than echoing
 a value.
+## D20 — every file and subprocess boundary names UTF-8 explicitly (2026-09-04)
+
+SFM-13a compared the `sf` extractor against simple-salesforce's
+`describe()` on the same org. Every consumed key matched on every field
+of Account and Contact, with one exception: two picklist values on
+`Account.Shared_Data__c` whose first character is U+0421 CYRILLIC
+CAPITAL LETTER ES. `describe()` returned U+0421. We returned
+`U+00D0 U+00A1`.
+
+The org was not the variable. `extract.fetch_describe` called
+`subprocess.run(..., text=True)` with no `encoding=`, which decodes using
+`locale.getpreferredencoding()` — cp1252 on a stock Windows install. `sf
+--json` emits UTF-8 on every platform, and cp1252 reads the UTF-8 byte
+pair `D0 A1` as `Ð` + `¡`.
+
+**Why this was worth a decision rather than a one-line fix.** The
+consequences were out of all proportion to the cause:
+
+- **It broke a documented guarantee.** D5 and CLAUDE.md say a re-extract
+  against an unchanged org produces a byte-identical file. It did, *per
+  machine*. A Windows developer and a Linux runner produced different
+  bytes from the same unchanged org, so the property held locally and
+  failed exactly where it was supposed to be load-bearing.
+- **It produced false CRITICALs.** A snapshot committed from cp1252 and
+  checked from UTF-8 leaves `was - now` non-empty, and `_compare_field`
+  raises `value removed "..."` at CRITICAL — a failing build reporting
+  drift that never happened. This project's pitch is that a failing build
+  is a trustworthy signal about the org; a false CRITICAL attacks the
+  pitch directly, and is worse than the silent wrong answer it was meant
+  to replace.
+- **CI could not see it.** Linux runners are UTF-8. The bug was invisible
+  on every machine that ran the test suite.
+- **It defeated an existing deliberate choice.** `write_snapshot` passes
+  `ensure_ascii=False` specifically so labels read as themselves in a
+  diff (D5). The value was already corrupt by the time it got there, so
+  the care taken at the write boundary was spent preserving mojibake.
+
+**The rule: name the producer's encoding, never inherit the reader's.**
+Any boundary where bytes become text — subprocess output, file reads,
+file writes — states its encoding explicitly. `locale.getpreferredencoding()`
+describes the machine running the code, which is never the thing that
+determined how the bytes were written.
+
+Audited at the time of writing. The other boundaries were already
+correct, and are listed so a future change can be checked against them:
+
+| site | boundary | encoding |
+|---|---|---|
+| `extract.fetch_describe` | `sf` stdout | `utf-8` (this fix) |
+| `extract.write_snapshot` | snapshot out | `utf-8`, `newline="\n"` |
+| `extract.read_snapshot` | snapshot in | `read_bytes()` + explicit `.decode("utf-8")` |
+| `config.load_config` | `soqlmodel.toml` | `utf-8-sig` |
+| `generate.write_combined_module` | generated `.py` | `utf-8`, `newline="\n"` |
+
+`config` reads `utf-8-sig` rather than `utf-8` on purpose, and that is
+not an inconsistency with this rule: `soqlmodel.toml` is hand-written, a
+Windows editor may leave a BOM, and the user should not have to care.
+Snapshots are machine-written, so `read_snapshot` refuses a BOM instead —
+a BOM there means the bytes are no longer the ones we wrote (D13). The
+rule is that the encoding is *stated*, not that it is the same everywhere.
+
+**Testing this needs a fake that decodes.** Every pre-existing test hands
+`fetch_describe` a `CompletedProcess` whose `stdout` is already a `str`,
+so the decode step was mocked out of existence — which is why the suite
+was green throughout. The new test replaces `subprocess.run` with a fake
+that performs the decode itself, and whose fallback is pinned to cp1252
+rather than read from the live locale. Pinning matters: a fallback of
+`locale.getpreferredencoding()` would make the test pass on a UTF-8
+runner and leave the bug in CI's blind spot a second time. The defect is
+"we did not say which encoding", not "this machine is Windows", and the
+test asserts the former.
