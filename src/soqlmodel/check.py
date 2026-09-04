@@ -212,7 +212,7 @@ def check(config: Config, snapshot_path: str | Path) -> list[Change]:
     org = config.org or committed["org"]
     scope = config.scope_for(sobject)
 
-    describe = fetch_describe(sobject, org)
+    describe = fetch_describe(sobject, org, config.require_api_version())
     live = build_snapshot(describe, org=org, fields=scope, strict=False)
 
     return diff_snapshots(committed, live)

@@ -3,6 +3,7 @@
 ``soqlmodel.toml`` at the project root declares the dependency::
 
     org = "FULL Sandbox"
+    api_version = "68.0"
 
     [objects]
     Account = ["Name", "AnnualRevenue", "Contract_End__c"]
@@ -10,6 +11,13 @@
 
 A list of field names scopes that object to those fields; ``"*"`` means every
 field. No config file at all means everything, so the tool works unconfigured.
+
+``api_version`` pins the Salesforce API version every extraction runs against.
+It has no default on purpose: the two extraction sources negotiate different
+versions when left to themselves, and a snapshot taken at one version against a
+snapshot taken at another differs in its *field list* — which `check` reports as
+drift that never happened (D21). Required by `snapshot` and `check`, ignored by
+`generate`, which never touches an org.
 
 Scoping is what makes a snapshot a *declaration of dependency* rather than a
 mirror of the org (D9). It is also the contract between whoever administers
@@ -37,7 +45,13 @@ ALL_FIELDS = "*"
 class Config:
     """A parsed ``soqlmodel.toml``. Immutable."""
 
+    # A label recorded in the snapshot. On the `sf` source it doubles as the
+    # --target-org alias; on the credential source it is only a name (D21).
     org: str | None = None
+    # The pinned Salesforce API version, e.g. "68.0". None means the config did
+    # not set one, which is an error at the point of extraction rather than
+    # here — `generate` has no use for it and must keep working without one.
+    api_version: str | None = None
     objects: dict[str, Scope] = dataclasses.field(default_factory=dict)
     path: Path | None = None
     # Matches the formatter the generated module will be checked by. 88 is
@@ -60,6 +74,24 @@ class Config:
     def sobjects(self) -> list[str]:
         """Configured sObject names, in a stable order."""
         return sorted(self.objects)
+
+    def require_api_version(self) -> str:
+        """The pinned API version, or a ConfigError naming what is missing.
+
+        A method rather than a helper in `project`, because `check` needs the
+        same rule and importing it from there would close an import cycle.
+        Callers check this before extracting, so a config missing the setting
+        fails without having contacted the org at all.
+        """
+        if not self.api_version:
+            raise ConfigError(
+                'no api_version configured; set api_version = "68.0" in soqlmodel.toml. '
+                "There is deliberately no default: the sf CLI and the credential "
+                "source each pick their own version, and two snapshots taken at "
+                "different versions differ in their field list, which check "
+                "reports as drift that never happened."
+            )
+        return self.api_version
 
 
 def _parse_scope(sobject: str, raw: Any) -> Scope:
@@ -84,6 +116,15 @@ def parse_config(data: dict[str, Any], path: Path | None = None) -> Config:
     if org is not None and not isinstance(org, str):
         raise ConfigError(f"org must be a string, got {org!r}")
 
+    api_version = data.get("api_version")
+    if api_version is not None and not isinstance(api_version, str):
+        # Worth its own message: `api_version = 68.0` is valid TOML and parses
+        # as a float, so the likely mistake is forgetting the quotes rather
+        # than passing something nonsensical. Say which one it is.
+        raise ConfigError(f'api_version must be a quoted string like "68.0", got {api_version!r}')
+    if api_version is not None and not api_version.strip():
+        raise ConfigError('api_version is empty; set it to a version like "68.0"')
+
     line_length = data.get("line_length", DEFAULT_LINE_LENGTH)
     if isinstance(line_length, bool) or not isinstance(line_length, int):
         raise ConfigError(f"line_length must be an integer, got {line_length!r}")
@@ -98,7 +139,13 @@ def parse_config(data: dict[str, Any], path: Path | None = None) -> Config:
         raise ConfigError(f"[objects] must be a table, got {raw_objects!r}")
 
     objects = {name: _parse_scope(name, raw) for name, raw in raw_objects.items()}
-    return Config(org=org, objects=objects, path=path, line_length=line_length)
+    return Config(
+        org=org,
+        api_version=api_version,
+        objects=objects,
+        path=path,
+        line_length=line_length,
+    )
 
 
 def load_config(path: str | Path) -> Config:

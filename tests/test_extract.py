@@ -54,7 +54,7 @@ def test_builds_the_command_as_a_list_with_the_org_alias_intact():
         patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
         patch("soqlmodel.extract.subprocess.run", return_value=completed) as run,
     ):
-        result = fetch_describe("Account", "FULL Sandbox")
+        result = fetch_describe("Account", "FULL Sandbox", "68.0")
 
     command = run.call_args.args[0]
     assert command == [
@@ -66,6 +66,9 @@ def test_builds_the_command_as_a_list_with_the_org_alias_intact():
         "--target-org",
         # One argv entry: a shell would have split this into two.
         "FULL Sandbox",
+        # Pinned, never left to the CLI to negotiate (D21).
+        "--api-version",
+        "68.0",
         "--json",
     ]
     assert result == {"name": "Account"}
@@ -270,7 +273,7 @@ def test_stdout_is_decoded_as_utf8_not_the_platform_default():
         patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
         patch("soqlmodel.extract.subprocess.run", _fake_run_decoding_like_subprocess),
     ):
-        describe = fetch_describe("Account", "alias")
+        describe = fetch_describe("Account", "alias", "68.0")
 
     snapshot = build_snapshot(describe, org="alias")
     field = snapshot["fields"][0]
@@ -293,7 +296,7 @@ def test_fetch_describe_names_the_encoding_explicitly():
         patch("soqlmodel.extract.shutil.which", return_value="/usr/bin/sf"),
         patch("soqlmodel.extract.subprocess.run", return_value=completed) as run,
     ):
-        fetch_describe("Account", "alias")
+        fetch_describe("Account", "alias", "68.0")
 
     assert run.call_args.kwargs["encoding"] == "utf-8"
 

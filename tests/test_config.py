@@ -221,3 +221,46 @@ def test_line_length_reaches_the_generated_module(tmp_path):
 
     assert "Field(\n" in narrow
     assert "Field(\n" not in wide
+
+
+# --- api_version (SFM-13c) ---------------------------------------------------
+
+
+def test_api_version_is_parsed(tmp_path):
+    path = tmp_path / "soqlmodel.toml"
+    path.write_text('org = "Prod"\napi_version = "68.0"\n', encoding="utf-8")
+
+    assert load_config(path).api_version == "68.0"
+
+
+def test_api_version_defaults_to_none_not_a_version():
+    """No fallback, deliberately. A default here is the 59.0-vs-68.0 skew that
+    made two sources disagree about the field list (D21)."""
+    assert Config().api_version is None
+
+
+def test_require_api_version_names_the_setting():
+    with pytest.raises(ConfigError, match="no api_version configured"):
+        Config(org="Prod").require_api_version()
+
+
+def test_require_api_version_returns_it_when_set():
+    assert Config(org="Prod", api_version="68.0").require_api_version() == "68.0"
+
+
+def test_an_unquoted_api_version_says_to_quote_it():
+    """`api_version = 68.0` is valid TOML and parses as a float, so this is the
+    likely mistake rather than an exotic one."""
+    with pytest.raises(ConfigError, match="must be a quoted string"):
+        parse_config({"api_version": 68.0})
+
+
+def test_an_empty_api_version_is_refused():
+    with pytest.raises(ConfigError, match="api_version is empty"):
+        parse_config({"api_version": "   "})
+
+
+def test_generate_does_not_need_an_api_version():
+    """It never touches an org, so requiring one would break the offline path
+    for no reason."""
+    assert Config(objects={"Account": None}).api_version is None

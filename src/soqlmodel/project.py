@@ -78,7 +78,10 @@ def _ensure_dir(directory: Path) -> None:
 
 def _require_org(config: Config) -> str:
     if not config.org:
-        raise ConfigError('no org configured; set org = "<alias>" in soqlmodel.toml')
+        # Not "alias" any more: on the credential source this is only the name
+        # recorded in the snapshot, and calling it an alias sent readers looking
+        # for an `sf` org that need not exist (D21).
+        raise ConfigError('no org configured; set org = "<name>" in soqlmodel.toml')
     return config.org
 
 
@@ -116,6 +119,7 @@ def snapshot_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) ->
     Returns the paths written, in sObject order.
     """
     org = _require_org(config)
+    api_version = config.require_api_version()
     sobjects = _require_objects(config)
 
     directory = Path(schema_dir)
@@ -123,7 +127,7 @@ def snapshot_all(config: Config, schema_dir: str | Path = DEFAULT_SCHEMA_DIR) ->
 
     written = []
     for sobject in sobjects:
-        describe = fetch_describe(sobject, org)
+        describe = fetch_describe(sobject, org, api_version)
         snapshot = build_snapshot(describe, org=org, fields=config.scope_for(sobject), strict=True)
         written.append(write_snapshot(snapshot, snapshot_path(sobject, directory)))
     return written

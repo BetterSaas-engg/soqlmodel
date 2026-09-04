@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CONFIG = """
 org = "FULL Sandbox"
+api_version = "68.0"
 
 [objects]
 Account = ["Name", "AnnualRevenue"]
@@ -58,7 +59,7 @@ def project(tmp_path, monkeypatch):
     """A project directory with a config, and a fake org behind it."""
     (tmp_path / "soqlmodel.toml").write_text(CONFIG, encoding="utf-8")
 
-    def fake_fetch(sobject, org):
+    def fake_fetch(sobject, org, api_version):
         return ORG_SCHEMA[sobject]
 
     monkeypatch.setattr("soqlmodel.project.fetch_describe", fake_fetch)
@@ -231,7 +232,7 @@ def test_generate_without_snapshots_is_a_clean_error(project, capsys):
 
 
 def test_an_unreachable_org_is_a_clean_error(project, monkeypatch, capsys):
-    def unreachable(sobject, org):
+    def unreachable(sobject, org, api_version):
         raise SfCliError("sf sobject describe exited 1: No org found for alias 'nope'")
 
     monkeypatch.setattr("soqlmodel.project.fetch_describe", unreachable)
@@ -246,7 +247,7 @@ def test_an_unreachable_org_is_a_clean_error(project, monkeypatch, capsys):
 
 def test_a_declared_field_the_org_lacks_is_a_clean_error(project, capsys):
     (project / "soqlmodel.toml").write_text(
-        'org = "FULL Sandbox"\n\n[objects]\nAccount = ["Name", "Nope__c"]\n',
+        'org = "FULL Sandbox"\napi_version = "68.0"\n\n[objects]\nAccount = ["Name", "Nope__c"]\n',
         encoding="utf-8",
     )
 
@@ -307,7 +308,7 @@ def test_a_bug_reaches_the_terminal_as_a_traceback(project):
     injected = (
         "import sys\n"
         "import soqlmodel.project as project\n"
-        "project.fetch_describe = lambda sobject, org: {'name': sobject, 'fields': []}\n"
+        "project.fetch_describe = lambda sobject, org, api_version: {'name': sobject, 'fields': []}\n"
         "def buggy(*args, **kwargs):\n"
         "    raise ValueError('bug in the snapshot builder')\n"
         "project.build_snapshot = buggy\n"

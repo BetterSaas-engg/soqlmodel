@@ -51,11 +51,17 @@ def unwrap_describe(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def fetch_describe(sobject: str, org: str) -> dict[str, Any]:
+def fetch_describe(sobject: str, org: str, api_version: str) -> dict[str, Any]:
     """Describe one sobject via the ``sf`` CLI.
 
     Args are passed as a list, never a shell string — org aliases contain
     spaces (``FULL Sandbox``) and would be split by a shell.
+
+    ``api_version`` is passed through as ``--api-version`` and is required, not
+    optional. Left to itself the CLI picks a version from the org and its own
+    config, which is how a snapshot taken here ended up describing a different
+    field list than one taken through the credential path — drift with no
+    schema change behind it (D21).
 
     Raises:
         SfCliError: if ``sf`` is not on PATH, exits non-zero, or emits output
@@ -78,6 +84,8 @@ def fetch_describe(sobject: str, org: str) -> dict[str, Any]:
         sobject,
         "--target-org",
         org,
+        "--api-version",
+        api_version,
         "--json",
     ]
 
