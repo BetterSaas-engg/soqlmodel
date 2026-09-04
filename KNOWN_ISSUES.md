@@ -36,12 +36,31 @@ https://pypi.org/pypi/soqlmodel/json` returns 404, re-checked
 registries, separate namespaces. The 404 is the evidence, and it holds
 only until someone else takes the name.
 
-## The simple-salesforce leg has never run against a live org (2026-08-27)
+## RESOLVED — the simple-salesforce leg had never run against a live org (2026-08-27, closed 2026-09-04)
 
-**The single largest untested claim in v1.** D1 names simple-salesforce
-as the execution dependency and `soqlmodel[salesforce]` installs it, but
-no `simple_salesforce.Salesforce` object has ever been handed to
-`soqlmodel.execute` against a real org. Not once.
+**Closed by SFM-12.** A JWT-authenticated `simple_salesforce.Salesforce`
+was handed to `soqlmodel.execute` against FULL Sandbox and drained 4786
+Contact rows in batches `[2000, 2000, 786]`, matching `COUNT()` exactly —
+through simple-salesforce's own `query` and `query_more` over HTTP, not
+through the CLI-backed stand-in. `execute_iter` laziness was verified on
+the same cursor: constructing the iterator issued no request, and the
+first row cost exactly one batch of three.
+
+The batch split is identical to SFM-10's CLI-backed run against the same
+object. Two independent clients, the same cursor, the same boundaries —
+which is the corroboration that makes the paging claim worth trusting.
+
+Tests: `tests/test_live_org.py`, three of them, opt-in behind
+`SOQLMODEL_LIVE_ORG=1`. **CI does not run them and should not** — see the
+next entry for the standing caveat that replaces this one.
+
+The original entry follows, kept because the reasoning about what a
+partial proof is worth still applies.
+
+**Was: the single largest untested claim in v1.** D1 names
+simple-salesforce as the execution dependency and `soqlmodel[salesforce]`
+installs it, but no `simple_salesforce.Salesforce` object had ever been
+handed to `soqlmodel.execute` against a real org. Not once.
 
 What *is* proven, and it is not nothing:
 
@@ -83,8 +102,37 @@ break every call we make — verified in
 `test_issubclass_alone_does_not_catch_renamed_parameters`. A conformance
 check built on `isinstance` alone would have been theatre.
 
-What is still unproven: those two methods against real Salesforce HTTP.
-The README discloses it.
+What was still unproven at that point: those two methods against real
+Salesforce HTTP. SFM-12 closed it, as recorded at the top of this entry.
+
+## The live-org tests are not in CI, by choice (2026-09-04)
+
+The standing caveat that replaces the entry above. The wire path is
+proven **as of a point in time**, not continuously.
+
+`tests/test_live_org.py` needs an org, a certificate and a private key.
+Wiring it into CI would mean a build that can go red because a sandbox
+was refreshed, a cert expired, or the network blinked — failures that say
+nothing about this codebase. For a project whose pitch is "a schema
+change surfaces as a failing build rather than as wrong numbers," a build
+that cries wolf is worse than one that admits its blind spot. So it stays
+manual and the README discloses it.
+
+What that costs: an upstream simple-salesforce change to the HTTP layer
+would not be caught by CI. What limits the cost: the transport-stubbed
+conformance suite runs every commit and covers signatures, the
+`identifier_is_url` branch and response parsing, which is where that kind
+of break would most likely show.
+
+Scope of the SFM-12 run, stated so it is not read as more than it is: one
+org (FULL Sandbox), one auth flow (JWT bearer), one object (Contact), one
+API version, on one date. Re-run it before a release, not never.
+
+**How to re-run:** set `SOQLMODEL_LIVE_ORG=1` plus the four credential
+variables named in the module docstring, and `pytest -s
+tests/test_live_org.py`. The opt-in variable turns any skip into a
+failure, so a run that tests nothing reports as a failure rather than as
+success.
 
 ## `sf org display` does not yield a usable session for a third-party client (2026-08-27)
 

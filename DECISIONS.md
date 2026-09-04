@@ -751,3 +751,51 @@ rewrite is the entire bug.
 
 Determinism (D5) is unaffected and still tested: same snapshot and same
 `line_length` produce byte-identical text.
+
+## D19 — live-org tests are opt-in by one variable, and never run in CI (2026-09-04)
+
+SFM-12 needed simple-salesforce to talk to a real org. That test cannot
+live in the default suite, and the question was how to keep it out
+without letting it rot.
+
+**Offline by default, and the switch is not the credentials.** The
+module is skipped unless `SOQLMODEL_LIVE_ORG=1`. The tempting alternative
+— enable when credentials are present — was rejected: credentials in a
+shell profile would silently turn `pytest` into something that opens
+sockets, on a machine where nobody asked for that. Presence of a secret
+is not consent to use it.
+
+**One variable, not SFM-11's two.** The conformance module uses a
+separate `SOQLMODEL_REQUIRE_SALESFORCE_EXTRA` to turn its skip into a
+failure, because a missing optional extra is a legitimate local state
+that should skip quietly. A live run has no such state: asking for one
+and accepting zero tests is never what was meant. So the opt-in *is* the
+requirement flag — past the gate, missing credentials, a missing extra,
+or an object that no longer crosses a batch boundary are all hard
+failures. Both directions are proven, not assumed: without the variable
+the module skips; with it and no credentials, collection errors.
+
+**Not in CI (D14 covers what is).** A green build must mean "the code is
+fine." A job that can fail on a sandbox refresh or an expired certificate
+breaks that meaning, and the project's whole pitch is that a failing
+build is a trustworthy signal. The cost is that upstream HTTP-layer
+breakage is not caught continuously; the transport-stubbed conformance
+suite from SFM-11 runs every commit and covers the likeliest shape of it.
+
+**Three tests, one per unproven claim.** Live tests fail for reasons
+unrelated to this codebase, so each one has to earn its place: auth plus
+a query (D15's contract over real HTTP), a drain crossing a real batch
+boundary, and `execute_iter` laziness. Field types, `WHERE`, `LIMIT` and
+the malformed-response branches are covered offline in `test_execute.py`;
+re-running them over the wire would add flakiness and no information.
+
+**No hardcoded row counts.** The paging test asserts against the org's
+own `COUNT()` rather than a remembered total, so sandbox data drift
+cannot fail it for a non-defect. It reports the batch sizes it saw and
+fails loudly if the object stops paging, rather than skipping — a skip
+there would silently drop the only coverage of the boundary.
+
+**Credentials live in the environment, never the repo.** No default
+username, host, key path or consumer key appears anywhere in the tree,
+and the gate's error messages name the empty variable rather than echoing
+a value.
