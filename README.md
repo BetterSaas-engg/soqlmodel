@@ -312,11 +312,11 @@ source. See [Extracting without the sf CLI](#extracting-without-the-sf-cli).
   package performs no auth and no HTTP at all: extraction shells out to a CLI
   you have already authenticated, and execution is handed to a
   `simple_salesforce` client *you* construct. With `--source credentials` it
-  does authenticate, and it does read four environment variables to do it — so
-  it is no longer true to say it never sees a credential. What remains true:
-  credentials are read from the environment at the moment they are used, are
-  never written to disk, never logged, and never read from `soqlmodel.toml`.
-  No error message echoes one.
+  does authenticate, reading four environment variables to do so. Those
+  values are read at the moment they are used, never written to disk, never
+  logged, and never read from `soqlmodel.toml`. No message soqlmodel raises
+  contains a credential; note that an underlying `OSError` can name the key
+  file's *path* or the org host, so treat build logs accordingly.
 - **Not in-org dependency analysis.** Salesforce's own "Where is this used?"
   and tools like Elements.cloud answer what *in the org* references a field.
   This answers the opposite question: what does **your repository** depend on,
