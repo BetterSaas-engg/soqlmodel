@@ -569,3 +569,66 @@ def test_the_release_workflow_tag_check_would_accept_this_version():
     version = declared["project"]["version"]
 
     assert f"v{version}".lstrip("v") == version
+
+
+# --- auth rejection reaches the user as one line (SFM-14b) --------------------
+
+# Marked, so a leak is unmistakable rather than something to squint at.
+LEAK_CANARIES = {
+    "SOQLMODEL_SF_USERNAME": "LEAKCANARY-user@example.com",
+    "SOQLMODEL_SF_CONSUMER_KEY": "LEAKCANARY-consumer-key",
+    "SOQLMODEL_SF_PRIVATEKEY_FILE": "/LEAKCANARY/server.key",
+    "SOQLMODEL_SF_DOMAIN": "LEAKCANARY--sandbox.my",
+}
+
+
+class SalesforceAuthenticationFailed(Exception):
+    """simple-salesforce's exception by name only; the extra is absent in CI."""
+
+
+def test_bad_credentials_are_one_line_and_exit_two(project, monkeypatch, capsys):
+    """The whole of SFM-14b, end to end through main().
+
+    Before the fix this exception was neither a SoqlModelError nor an OSError,
+    so _EXPECTED_ERRORS missed it and the user got a traceback for the most
+    ordinary mistake this feature has.
+    """
+    for var, value in LEAK_CANARIES.items():
+        monkeypatch.setenv(var, value)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", real_extract_describe)
+
+    def raises_auth_failure(**kwargs: object):
+        raise SalesforceAuthenticationFailed(
+            "Authentication failed (code: invalid_client_id): client identifier invalid"
+        )
+
+    monkeypatch.setattr("soqlmodel.extract._salesforce_class", lambda: raises_auth_failure)
+
+    assert main(["snapshot", "--source", "credentials"]) == EXIT_ERROR
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("soqlmodel: ")
+    assert "Traceback" not in captured.err
+    assert len(captured.err.strip().splitlines()) == 1
+    assert "invalid_client_id" in captured.err
+
+
+def test_no_credential_value_reaches_the_output_on_an_auth_failure(project, monkeypatch, capsys):
+    """The four values, checked individually so a failure names which leaked."""
+    for var, value in LEAK_CANARIES.items():
+        monkeypatch.setenv(var, value)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", real_extract_describe)
+
+    def raises_auth_failure(**kwargs: object):
+        raise SalesforceAuthenticationFailed("Authentication failed: nope")
+
+    monkeypatch.setattr("soqlmodel.extract._salesforce_class", lambda: raises_auth_failure)
+
+    main(["snapshot", "--source", "credentials"])
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    for var, value in LEAK_CANARIES.items():
+        assert value not in output, f"{var} leaked into output"
+    # The variable *names* are expected -- that is the actionable part.
+    assert "SOQLMODEL_SF_USERNAME" in captured.err

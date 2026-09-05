@@ -19,7 +19,12 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from soqlmodel.errors import CredentialError, SfCliError, SnapshotError
+from soqlmodel.errors import (
+    AuthenticationError,
+    CredentialError,
+    SfCliError,
+    SnapshotError,
+)
 
 SOURCE_SF = "sf"
 SOURCE_CREDENTIALS = "credentials"
@@ -197,6 +202,34 @@ def _salesforce_class() -> Any:
     return import_module("simple_salesforce").Salesforce
 
 
+AUTH_EXCEPTION_NAME = "SalesforceAuthenticationFailed"
+
+
+def _is_auth_failure(exc: BaseException) -> bool:
+    """Is this simple-salesforce's authentication rejection?
+
+    Matched by **class name across the MRO**, which is the one identification
+    that needs no reference to the class at all. The alternatives both fail
+    something that matters:
+
+    ``except SalesforceAuthenticationFailed`` needs a static import, which
+    SFM-13c established breaks the optional-extra invariant and fails
+    ``mypy --strict`` wherever the extra is not installed — which is how CI
+    installs.
+
+    Fetching the class through ``import_module``, as :func:`_salesforce_class`
+    does, would work in production but could not be *tested* where it counts:
+    CI's test job runs without the extra, so no offline test could construct
+    the real exception to raise. A guard that only runs on a developer machine
+    is the kind this project has been bitten by already (D20).
+
+    Walking the MRO rather than checking ``type(exc).__name__`` means a
+    subclass of the real exception is still recognised, and it survives
+    upstream moving the class to a different module.
+    """
+    return any(cls.__name__ == AUTH_EXCEPTION_NAME for cls in type(exc).__mro__)
+
+
 def fetch_describe_via_credentials(sobject: str, api_version: str) -> dict[str, Any]:
     """Describe one sobject over REST, authenticating from the environment.
 
@@ -216,20 +249,39 @@ def fetch_describe_via_credentials(sobject: str, api_version: str) -> dict[str, 
     Raises:
         CredentialError: if the extra is not installed, or a variable is unset.
             Both are raised before any network call, naming what is missing.
+        AuthenticationError: if the org rejects the credentials.
     """
     credentials = require_credentials()
     salesforce = _salesforce_class()
 
-    client = salesforce(
-        username=credentials["username"],
-        consumer_key=credentials["consumer_key"],
-        privatekey_file=credentials["privatekey_file"],
-        domain=credentials["domain"],
-        # Pinned, never negotiated. See D21 and Config.require_api_version.
-        version=api_version,
-    )
+    try:
+        client = salesforce(
+            username=credentials["username"],
+            consumer_key=credentials["consumer_key"],
+            privatekey_file=credentials["privatekey_file"],
+            domain=credentials["domain"],
+            # Pinned, never negotiated. See D21 and Config.require_api_version.
+            version=api_version,
+        )
+        described = getattr(client, sobject).describe()
+    except Exception as exc:
+        # Both calls are inside the try because which one authenticates is
+        # simple-salesforce's business: the login is lazy in some versions and
+        # eager in others, and pinning that down here would couple us to an
+        # implementation detail we have no reason to know.
+        if not _is_auth_failure(exc):
+            raise
+        # `exc` carries no credential values: simple-salesforce builds it from
+        # the token endpoint's own `error` / `error_description` fields, and
+        # hardcodes the URL in it as the literal "authentication_endpoint", so
+        # not even the domain rides along. Checked against the real class and
+        # confirmed against a live rejection before being included here.
+        raise AuthenticationError(
+            f"the org rejected these credentials: {exc}. Check the values of "
+            f"{', '.join(CREDENTIAL_ENV_VARS.values())}, and that the connected "
+            f"app trusts this user."
+        ) from exc
 
-    described = getattr(client, sobject).describe()
     if not isinstance(described, dict):
         raise CredentialError(
             f"describe() for {sobject} returned {type(described).__name__}, not a dict"

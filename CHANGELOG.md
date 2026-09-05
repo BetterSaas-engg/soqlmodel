@@ -86,6 +86,12 @@ container, on a CI runner, or from a scheduler.
   subprocess boundary, so the suite was green throughout. Now decoded as UTF-8
   explicitly, with a test whose fake decoder is pinned to cp1252 rather than
   reading the live locale, so it fails on a UTF-8 runner too. (D20)
+- Bad credentials on `--source credentials` now exit 2 with one line instead of
+  a traceback. simple-salesforce's `SalesforceAuthenticationFailed` is neither a
+  `SoqlModelError` nor an `OSError`, so the CLI's handler missed it and the most
+  ordinary mistake this feature has looked like a crash. Converted to
+  `AuthenticationError` at the boundary; its message carries simple-salesforce's
+  own text, which contains no credential values. (D11)
 - Every file and subprocess boundary now names its encoding explicitly rather
   than inheriting the reader's. The others were already correct; this records the
   rule and adds the missing write/read pairing test for non-ASCII. (D20)
