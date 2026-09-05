@@ -1,6 +1,6 @@
 [project]
 name = "soqlmodel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Typed models and a SOQL query builder for Salesforce, generated from your org's schema."
 readme = "README.md"
 # 3.11 for stdlib tomllib. Widening this later is not a breaking change;

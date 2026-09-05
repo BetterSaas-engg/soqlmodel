@@ -174,8 +174,10 @@ jobs:
           uv run --isolated python - <<'PY'
           import glob, sys, zipfile
           with zipfile.ZipFile(glob.glob("dist/*.whl")[0]) as z:
-              meta = z.read("soqlmodel-0.1.0.dist-info/METADATA").decode()
               names = z.namelist()
+              # Derived, not hardcoded: a literal version here silently
+              # breaks on every bump, and release.yml already globs for it.
+              meta = z.read(next(n for n in names if n.endswith(".dist-info/METADATA"))).decode()
           if "License-Expression: MIT" not in meta:
               sys.exit("wheel METADATA is missing License-Expression: MIT")
           if not any(n.endswith("licenses/LICENSE") for n in names):

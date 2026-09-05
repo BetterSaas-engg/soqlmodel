@@ -44,7 +44,7 @@ TYPE_MAP = {
 # Unmapped Salesforce types degrade to this rather than raising: Salesforce
 # adds types, and an unknown one should cost us static typing on that field,
 # not the whole module. Compound types (address, location) land here by
-# design — see the backlog.
+# design, and the README's Known limitations says so.
 FALLBACK_TYPE = "Any"
 
 _DATETIME_NAMES = frozenset({"date", "datetime", "time"})
