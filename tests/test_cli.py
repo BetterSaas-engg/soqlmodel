@@ -414,7 +414,10 @@ def test_the_wheel_declares_the_console_script(tmp_path):
 
     wheel = next(iter(tmp_path.glob("*.whl")))
     with zipfile.ZipFile(wheel) as archive:
-        entry_points = archive.read("soqlmodel-0.1.0.dist-info/entry_points.txt").decode()
+        # Located by suffix rather than by name: hardcoding the version makes
+        # this test fail on the next bump for a reason unrelated to what it checks.
+        name = next(n for n in archive.namelist() if n.endswith(".dist-info/entry_points.txt"))
+        entry_points = archive.read(name).decode()
 
     assert "[console_scripts]" in entry_points
     assert "soqlmodel = soqlmodel.cli:main" in entry_points
@@ -534,3 +537,98 @@ def test_a_missing_api_version_is_a_clean_error(project, capsys):
     captured = capsys.readouterr()
     assert "no api_version configured" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_the_reported_version_matches_pyproject():
+    """pyproject is the single declaration; nothing may drift from it.
+
+    There is deliberately no `__version__` constant to keep in step -- the CLI
+    reads the installed distribution metadata, so there is one number, not two.
+    What this catches is the installed metadata going stale against the repo:
+    a developer bumps pyproject, the venv still carries the old build, and
+    `--version` reports a number the project no longer declares. On a release
+    that number is unfixable, because a version on PyPI can never be reused.
+    """
+    import tomllib
+    from importlib.metadata import version
+
+    declared = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert version("soqlmodel") == declared["project"]["version"]
+
+
+def test_the_release_workflow_tag_check_would_accept_this_version():
+    """The guard release.yml runs on a tag push, exercised here.
+
+    It compares GITHUB_REF_NAME with the leading "v" stripped against the
+    pyproject version. Getting that pairing wrong is caught only at publish
+    time otherwise, which is the worst place to find it.
+    """
+    import tomllib
+
+    declared = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = declared["project"]["version"]
+
+    assert f"v{version}".lstrip("v") == version
+
+
+# --- auth rejection reaches the user as one line (SFM-14b) --------------------
+
+# Marked, so a leak is unmistakable rather than something to squint at.
+LEAK_CANARIES = {
+    "SOQLMODEL_SF_USERNAME": "LEAKCANARY-user@example.com",
+    "SOQLMODEL_SF_CONSUMER_KEY": "LEAKCANARY-consumer-key",
+    "SOQLMODEL_SF_PRIVATEKEY_FILE": "/LEAKCANARY/server.key",
+    "SOQLMODEL_SF_DOMAIN": "LEAKCANARY--sandbox.my",
+}
+
+
+class SalesforceAuthenticationFailed(Exception):
+    """simple-salesforce's exception by name only; the extra is absent in CI."""
+
+
+def test_bad_credentials_are_one_line_and_exit_two(project, monkeypatch, capsys):
+    """The whole of SFM-14b, end to end through main().
+
+    Before the fix this exception was neither a SoqlModelError nor an OSError,
+    so _EXPECTED_ERRORS missed it and the user got a traceback for the most
+    ordinary mistake this feature has.
+    """
+    for var, value in LEAK_CANARIES.items():
+        monkeypatch.setenv(var, value)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", real_extract_describe)
+
+    def raises_auth_failure(**kwargs: object):
+        raise SalesforceAuthenticationFailed(
+            "Authentication failed (code: invalid_client_id): client identifier invalid"
+        )
+
+    monkeypatch.setattr("soqlmodel.extract._salesforce_class", lambda: raises_auth_failure)
+
+    assert main(["snapshot", "--source", "credentials"]) == EXIT_ERROR
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("soqlmodel: ")
+    assert "Traceback" not in captured.err
+    assert len(captured.err.strip().splitlines()) == 1
+    assert "invalid_client_id" in captured.err
+
+
+def test_no_credential_value_reaches_the_output_on_an_auth_failure(project, monkeypatch, capsys):
+    """The four values, checked individually so a failure names which leaked."""
+    for var, value in LEAK_CANARIES.items():
+        monkeypatch.setenv(var, value)
+    monkeypatch.setattr("soqlmodel.project.extract_describe", real_extract_describe)
+
+    def raises_auth_failure(**kwargs: object):
+        raise SalesforceAuthenticationFailed("Authentication failed: nope")
+
+    monkeypatch.setattr("soqlmodel.extract._salesforce_class", lambda: raises_auth_failure)
+
+    main(["snapshot", "--source", "credentials"])
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    for var, value in LEAK_CANARIES.items():
+        assert value not in output, f"{var} leaked into output"
+    # The variable *names* are expected -- that is the actionable part.
+    assert "SOQLMODEL_SF_USERNAME" in captured.err

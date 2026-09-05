@@ -45,9 +45,27 @@ class CredentialError(SoqlModelError):
     not being installed. Its sibling is :class:`SfCliError`: one class per
     extraction source, so the class alone says which one was asked for.
 
-    Raised before any network call. An error from Salesforce itself, or from
-    simple-salesforce, is not this — it propagates as its own type, the same
-    reasoning as :class:`ExecuteError` (D15).
+    Raised before any network call: the credentials could not even be
+    assembled. Being rejected once they reach the org is
+    :class:`AuthenticationError` instead.
+    """
+
+
+class AuthenticationError(SoqlModelError):
+    """The org rejected the credentials on the ``credentials`` source.
+
+    Sibling of :class:`CredentialError`, not a subclass: that one means the
+    credentials could not be assembled and is raised before any network call,
+    while this one means they were assembled, sent, and refused. The fix
+    differs — one is a variable you forgot, the other is a value that is wrong
+    or an app that does not trust you.
+
+    Narrow on purpose. Only an authentication rejection converts; every other
+    failure from Salesforce or from simple-salesforce still propagates as its
+    own type, for the reason :class:`ExecuteError` gives (D15). This one is
+    converted because wrong credentials are the most ordinary way to get this
+    feature wrong, and D11 puts "the org could not be reached" squarely among
+    the failures a user should read as one line rather than as a traceback.
     """
 
 

@@ -287,10 +287,20 @@ Exit codes overall:
 
 ### In CI
 
+The `sf` CLI is usually not installed on a runner, so use the credential
+source. See [Extracting without the sf CLI](#extracting-without-the-sf-cli).
+
 ```yaml
-- run: pip install soqlmodel
-- run: soqlmodel check
+- run: pip install "soqlmodel[salesforce]"
+- run: soqlmodel check --source credentials
+  env:
+    SOQLMODEL_SF_USERNAME: ${{ secrets.SOQLMODEL_SF_USERNAME }}
+    SOQLMODEL_SF_CONSUMER_KEY: ${{ secrets.SOQLMODEL_SF_CONSUMER_KEY }}
+    SOQLMODEL_SF_PRIVATEKEY_FILE: ${{ secrets.SOQLMODEL_SF_PRIVATEKEY_FILE }}
+    SOQLMODEL_SF_DOMAIN: ${{ secrets.SOQLMODEL_SF_DOMAIN }}
 ```
+
+`check` exits 1 on CRITICAL drift, so this fails the build.
 
 ## What this is not
 
@@ -298,9 +308,15 @@ Exit codes overall:
   relationship traversal. Models are schema descriptors.
 - **No writes. Ever.** There is no DML in this package and no code path that
   reaches it. It reads schema and it reads rows.
-- **No auth, no HTTP.** Schema extraction shells out to the `sf` CLI you have
-  already authenticated; execution is handed to a `simple_salesforce` client
-  you construct. This package never sees a credential.
+- **No writes, and no credential storage.** On the default `sf` source this
+  package performs no auth and no HTTP at all: extraction shells out to a CLI
+  you have already authenticated, and execution is handed to a
+  `simple_salesforce` client *you* construct. With `--source credentials` it
+  does authenticate, reading four environment variables to do so. Those
+  values are read at the moment they are used, never written to disk, never
+  logged, and never read from `soqlmodel.toml`. No message soqlmodel raises
+  contains a credential; note that an underlying `OSError` can name the key
+  file's *path* or the org host, so treat build logs accordingly.
 - **Not in-org dependency analysis.** Salesforce's own "Where is this used?"
   and tools like Elements.cloud answer what *in the org* references a field.
   This answers the opposite question: what does **your repository** depend on,

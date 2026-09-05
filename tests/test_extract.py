@@ -5,12 +5,19 @@ from unittest.mock import patch
 import pytest
 
 from soqlmodel.describe import build_snapshot
-from soqlmodel.errors import CredentialError, SfCliError, SnapshotError, SoqlModelError
+from soqlmodel.errors import (
+    AuthenticationError,
+    CredentialError,
+    SfCliError,
+    SnapshotError,
+    SoqlModelError,
+)
 from soqlmodel.extract import (
     CREDENTIAL_ENV_VARS,
     SOURCE_CREDENTIALS,
     SOURCE_SF,
     SOURCES,
+    _is_auth_failure,
     extract_describe,
     fetch_describe,
     fetch_describe_via_credentials,
@@ -535,3 +542,104 @@ def test_both_sources_produce_the_same_snapshot_from_the_same_content(monkeypatc
 
     assert via_sf == via_credentials
     assert build_snapshot(via_sf, org="alias") == build_snapshot(via_credentials, org="alias")
+
+
+# --- auth rejection becomes a user error (SFM-14b) -----------------------------
+
+# Marked so a leak is unmistakable in an assertion failure.
+FAKE_CREDENTIALS = {
+    "SOQLMODEL_SF_USERNAME": "LEAKCANARY-user@example.com",
+    "SOQLMODEL_SF_CONSUMER_KEY": "LEAKCANARY-consumer-key",
+    "SOQLMODEL_SF_PRIVATEKEY_FILE": "/LEAKCANARY/server.key",
+    "SOQLMODEL_SF_DOMAIN": "LEAKCANARY--sandbox.my",
+}
+
+
+class SalesforceAuthenticationFailed(Exception):
+    """Stands in for simple-salesforce's exception, by name.
+
+    A stub is the only option that runs where it matters: CI's test job
+    installs without the [salesforce] extra, so the real class does not exist
+    there. That is exactly why the production code matches on the class name
+    across the MRO rather than on class identity -- see extract._is_auth_failure.
+    """
+
+
+def _failing_salesforce(exc: BaseException):
+    """A Salesforce stand-in whose construction raises ``exc``."""
+
+    def constructor(**kwargs: object):
+        raise exc
+
+    return constructor
+
+
+def test_an_auth_rejection_becomes_an_authentication_error(monkeypatch):
+    _set_credentials(monkeypatch)
+    monkeypatch.setattr(
+        "soqlmodel.extract._salesforce_class",
+        lambda: _failing_salesforce(
+            SalesforceAuthenticationFailed(
+                "Authentication failed (code: invalid_client_id): client identifier invalid"
+            )
+        ),
+    )
+
+    with pytest.raises(AuthenticationError) as exc:
+        fetch_describe_via_credentials("Account", "68.0")
+
+    assert "rejected these credentials" in str(exc.value)
+    # simple-salesforce's own text is carried through: it names the actual
+    # cause, and it carries no credential values.
+    assert "invalid_client_id" in str(exc.value)
+    assert isinstance(exc.value, SoqlModelError)
+
+
+def test_the_auth_error_names_the_variables_to_check(monkeypatch):
+    _set_credentials(monkeypatch)
+    monkeypatch.setattr(
+        "soqlmodel.extract._salesforce_class",
+        lambda: _failing_salesforce(SalesforceAuthenticationFailed("nope")),
+    )
+
+    with pytest.raises(AuthenticationError) as exc:
+        fetch_describe_via_credentials("Account", "68.0")
+
+    for var in CREDENTIAL_ENV_VARS.values():
+        assert var in str(exc.value)
+
+
+def test_a_subclass_of_the_auth_exception_is_still_converted(monkeypatch):
+    """Matching walks the MRO, so upstream subclassing does not slip past."""
+
+    class MoreSpecific(SalesforceAuthenticationFailed):
+        pass
+
+    _set_credentials(monkeypatch)
+    monkeypatch.setattr(
+        "soqlmodel.extract._salesforce_class",
+        lambda: _failing_salesforce(MoreSpecific("nope")),
+    )
+
+    with pytest.raises(AuthenticationError):
+        fetch_describe_via_credentials("Account", "68.0")
+
+
+def test_other_exceptions_are_not_converted(monkeypatch):
+    """Narrow on purpose. Converting everything would dress a bug in
+    simple-salesforce, or a broken network, as a tidy user error (D11/D15)."""
+    _set_credentials(monkeypatch)
+    monkeypatch.setattr(
+        "soqlmodel.extract._salesforce_class",
+        lambda: _failing_salesforce(RuntimeError("something else entirely")),
+    )
+
+    with pytest.raises(RuntimeError, match="something else entirely"):
+        fetch_describe_via_credentials("Account", "68.0")
+
+
+def test_is_auth_failure_matches_by_name_not_identity():
+    """The mechanism itself, stated as a test so the reason survives."""
+    assert _is_auth_failure(SalesforceAuthenticationFailed("x"))
+    assert not _is_auth_failure(RuntimeError("x"))
+    assert not _is_auth_failure(ValueError("x"))
